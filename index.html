@@ -114,7 +114,7 @@
   input:focus,select:focus,textarea:focus,button:focus-visible{outline:2px solid var(--accent); outline-offset:1px;}
   textarea{min-height:70px; resize:vertical;}
   select{appearance:none; -webkit-appearance:none;}
-  .ingrow{display:grid; grid-template-columns:1fr auto; gap:8px; margin-bottom:8px; align-items:start;}
+  .ingrow{display:grid; grid-template-columns:84px 1fr auto; gap:8px; margin-bottom:8px; align-items:start;}
   .ingrow .g2{display:grid; grid-template-columns:1fr 1fr; gap:8px; grid-column:1 / -1;}
   .ingrow input{padding:10px;}
   .ingrow .del{background:var(--surface2); border:1px solid var(--border); color:var(--danger); border-radius:9px; width:44px; min-height:44px; font-size:18px; cursor:pointer;}
@@ -344,7 +344,7 @@ async function removePhoto(pid){
 /* render */
 const main=document.getElementById("main");
 function render(){ document.querySelectorAll("#nav button").forEach(b=>b.classList.toggle("active", b.dataset.tab===state.tab)); ({recipes:renderRecipes,favorites:renderFavorites,surprise:renderSurprise,kitchen:renderKitchen,week:renderWeek,shop:renderShop}[state.tab]||renderRecipes)(); }
-function recipeCard(r){ const ings=r.ingredients.filter(i=>i.name).map(i=>esc(i.name)).slice(0,6).join(" · "); const shown=r.ingredients.filter(i=>i.name).length;
+function recipeCard(r){ const ings=r.ingredients.filter(i=>i.name).map(i=>i.qty?`${esc(i.qty)} ${esc(i.name)}`:esc(i.name)).slice(0,6).join(" · "); const shown=r.ingredients.filter(i=>i.name).length;
   return `<div class="card">${(photos[r.id]||r.photoUrl)?`<img src="${photos[r.id]||r.photoUrl}" alt="" onerror="this.style.display='none'" style="width:100%;height:160px;object-fit:cover;border-radius:10px;margin-bottom:11px;display:block;">`:""}<div class="cardhead"><p class="name" style="flex:1;">${esc(r.name)}</p><button class="starbtn ${r.favorite?'on':''}" data-act="fav" data-id="${r.id}" aria-label="Make again">${r.favorite?'★':'☆'}</button></div>${shown?`<div class="muted" style="font-size:13.5px;">${ings}${shown>6?" …":""}</div>`:""}${chipsFor(r)}<div class="cardactions"><button class="ghost tiny" data-act="addweek" data-id="${r.id}">＋ This week</button><button class="ghost tiny" data-act="edit" data-id="${r.id}">Edit</button>${r.pinterest?`<a class="ghost tiny" style="text-decoration:none; display:inline-flex; align-items:center;" href="${esc(r.pinterest)}" target="_blank" rel="noopener">Pin ↗</a>`:""}</div></div>`; }
 function groupBy(list,cats,keyOf){ let body=""; cats.forEach(c=>{ const g=list.filter(r=>(keyOf(r)||"Other")===c); if(!g.length) return; body+=`<h2 class="section">${esc(c)}</h2>`+g.map(recipeCard).join(""); }); return body; }
 function groupByProtein(list){ return groupBy(list,PROTEINS,r=>r.protein); }
@@ -419,7 +419,7 @@ function openForm(existing){
     <div class="sheetactions"><button class="ghost" id="fCancel" style="flex:none;">Cancel</button>${existing?'<button class="ghost" id="fDelete" style="flex:none; color:var(--danger);">Delete</button>':''}<button class="btn" id="fSave">Save recipe</button></div>`;
   document.body.appendChild(overlay);
   const ingWrap=sheet.querySelector("#fIngs");
-  function ingRow(ing){ const div=document.createElement("div"); div.className="ingrow"; div.innerHTML=`<input class="i-name" placeholder="Ingredient" value="${esc(ing.name)}" /><button type="button" class="del" title="remove">✕</button><div class="g2"><input class="i-qty" placeholder="Qty (e.g. 1 lb)" value="${esc(ing.qty)}" /><input class="i-brand" placeholder="Brand (optional)" value="${esc(ing.brand||"")}" /></div><select class="i-store" style="grid-column:1 / -1;">${STORES.map(s=>`<option ${s===ing.store?"selected":""}>${s}</option>`).join("")}</select>`; div.querySelector(".del").onclick=()=>{ if(ingWrap.children.length>1) div.remove(); else div.querySelectorAll("input").forEach(i=>i.value=""); }; return div; }
+  function ingRow(ing){ const div=document.createElement("div"); div.className="ingrow"; div.innerHTML=`<input class="i-qty" placeholder="Qty" value="${esc(ing.qty)}" /><input class="i-name" placeholder="Ingredient" value="${esc(ing.name)}" /><button type="button" class="del" title="remove">✕</button><div class="g2"><input class="i-brand" placeholder="Brand (optional)" value="${esc(ing.brand||"")}" /><select class="i-store">${STORES.map(s=>`<option ${s===ing.store?"selected":""}>${s}</option>`).join("")}</select></div>`; div.querySelector(".del").onclick=()=>{ if(ingWrap.children.length>1) div.remove(); else div.querySelectorAll("input").forEach(i=>i.value=""); }; return div; }
   (r.ingredients.length?r.ingredients:[{name:"",qty:"",store:STORES[0],brand:""}]).forEach(i=>ingWrap.appendChild(ingRow(i)));
   sheet.querySelector("#addIng").onclick=()=>ingWrap.appendChild(ingRow({name:"",qty:"",store:STORES[0],brand:""}));
   sheet.querySelectorAll("#fTags .chip").forEach(c=>c.onclick=()=>c.classList.toggle("on"));
