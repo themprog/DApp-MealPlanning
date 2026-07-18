@@ -294,8 +294,16 @@ function applyBg(idv){ const b=BGS.find(x=>x.id===idv)||BGS[0]; state.bg=b.id; c
   else { l.style.backgroundSize=b.size||"auto"; l.style.backgroundRepeat="repeat"; } }
 
 /* storage / seed */
-async function loadState(){ try{ if(window.storage){ const r=await window.storage.get(KEY); if(r&&r.value) return JSON.parse(r.value); } }catch(e){} return null; }
-async function saveState(){ try{ if(window.storage){ await window.storage.set(KEY, JSON.stringify(state)); } }catch(e){} }
+async function loadState(){
+  try{ if(window.storage){ const r=await window.storage.get(KEY); if(r&&r.value) return JSON.parse(r.value); } }catch(e){}
+  try{ const v=localStorage.getItem(KEY); if(v) return JSON.parse(v); }catch(e){}
+  return null;
+}
+async function saveState(){
+  const json=JSON.stringify(state);
+  try{ if(window.storage) await window.storage.set(KEY, json); }catch(e){}
+  try{ localStorage.setItem(KEY, json); }catch(e){}
+}
 function id(){ return Math.random().toString(36).slice(2,10); }
 function seed(){
   return { theme:"crimson", bg:"wallpaper", font:"spooky", themedV2:true, fontSet:true, bgV3:true, appliances:["Crockpot","Instant Pot"],
@@ -318,9 +326,20 @@ function chipsFor(r){ const parts=[...r.tags.map(t=>TAGMAP[t]?`<span class="tag 
 /* photos — stored one key per recipe so the main save stays small */
 const photos={};
 function compressImage(file){ return new Promise((resolve,reject)=>{ const img=new Image(); const url=URL.createObjectURL(file); img.onload=()=>{ let w=img.width,h=img.height,M=760; if(w>h&&w>M){ h=Math.round(h*M/w); w=M; } else if(h>=w&&h>M){ w=Math.round(w*M/h); h=M; } const c=document.createElement("canvas"); c.width=w; c.height=h; c.getContext("2d").drawImage(img,0,0,w,h); URL.revokeObjectURL(url); try{ resolve(c.toDataURL("image/jpeg",0.72)); }catch(e){ reject(e); } }; img.onerror=()=>{ URL.revokeObjectURL(url); reject(new Error("bad image")); }; img.src=url; }); }
-async function loadPhoto(pid){ try{ const r=await window.storage.get("mpimg:"+pid); if(r&&r.value) photos[pid]=r.value; }catch(e){} }
-async function savePhoto(pid,d){ photos[pid]=d; try{ if(window.storage) await window.storage.set("mpimg:"+pid,d); }catch(e){} }
-async function removePhoto(pid){ delete photos[pid]; try{ if(window.storage) await window.storage.delete("mpimg:"+pid); }catch(e){} }
+async function loadPhoto(pid){
+  try{ if(window.storage){ const r=await window.storage.get("mpimg:"+pid); if(r&&r.value){ photos[pid]=r.value; return; } } }catch(e){}
+  try{ const v=localStorage.getItem("mpimg:"+pid); if(v) photos[pid]=v; }catch(e){}
+}
+async function savePhoto(pid,d){
+  photos[pid]=d;
+  try{ if(window.storage) await window.storage.set("mpimg:"+pid,d); }catch(e){}
+  try{ localStorage.setItem("mpimg:"+pid,d); }catch(e){}
+}
+async function removePhoto(pid){
+  delete photos[pid];
+  try{ if(window.storage) await window.storage.delete("mpimg:"+pid); }catch(e){}
+  try{ localStorage.removeItem("mpimg:"+pid); }catch(e){}
+}
 
 /* render */
 const main=document.getElementById("main");
