@@ -99,6 +99,17 @@
   .gitem.done .box{background:var(--accent); border-color:var(--accent);}
   .gname{font-size:15px; font-weight:600;}
   .gmeta{font-size:12.5px; color:var(--muted); margin-top:1px;}
+  .gprice{font-size:12.5px; margin-top:3px; color:var(--text);}
+
+  .product-card .cardhead{gap:4px;}
+  .pricegrid{display:grid; grid-template-columns:repeat(auto-fill,minmax(84px,1fr)); gap:8px; margin-top:8px;}
+  .pricecell{background:var(--surface2); border:1px solid var(--border); border-radius:9px; padding:7px 8px;}
+  .pricecell.cheap{border-color:var(--safe); background:var(--safe-bg);}
+  .pricecell .ps{font-size:10.5px; color:var(--muted); font-weight:700; text-transform:uppercase; letter-spacing:.3px; margin-bottom:3px;}
+  .pricecell input{padding:6px 7px; font-size:14px;}
+  .linkopt{display:flex; align-items:center; gap:10px; padding:10px 8px; border-bottom:1px solid var(--border); cursor:pointer;}
+  .linkopt:last-child{border-bottom:none;}
+  .linkopt.sel{background:var(--accent-bg); border-radius:9px;}
 
   .toyhead{display:flex; justify-content:space-between; align-items:center; margin:22px 0 8px;}
   .toyhead h2.section{margin:0;}
@@ -155,6 +166,7 @@
     <button data-tab="kitchen">Kitchen</button>
     <button data-tab="week">This Week</button>
     <button data-tab="shop">Shopping</button>
+    <button data-tab="products">Products</button>
   </nav>
   <main id="main"></main>
 </div>
@@ -312,9 +324,9 @@ function seed(){
       {id:id(),name:"Seared sirloin + mashed potatoes",protein:"Steak",tags:["gf","df","lowsugar","lowspice","smooth"],appliances:[],ingredients:[{name:"Sirloin steak",qty:"2",store:"Safeway",brand:""},{name:"Yukon gold potatoes",qty:"2 lb",store:"King Soopers",brand:"Simple Truth Organic"},{name:"Dairy-free butter",qty:"",store:"King Soopers",brand:"Simple Truth"}],pinterest:"",notes:"Mash with DF butter + a splash of broth, no dairy."},
       {id:id(),name:"Foil-baked salmon (his)",protein:"Seafood (his)",tags:["gf","df","lowsugar","fish"],appliances:[],ingredients:[{name:"Salmon fillet",qty:"1 lb",store:"Safeway",brand:""},{name:"Lemon",qty:"1",store:"King Soopers",brand:""}],pinterest:"",notes:"His meal. Foil packet keeps the smell down."},
     ],
-    weekMeals:[], filters:[], checked:{}, manual:[], tab:"recipes" };
+    weekMeals:[], filters:[], checked:{}, manual:[], products:[], productLinks:{}, tab:"recipes" };
 }
-let state; let surprisePick=null; let searchQuery=""; let favSearchQuery="";
+let state; let surprisePick=null; let searchQuery=""; let favSearchQuery=""; let productSearchQuery="";
 function withFocusPreserved(renderFn){ const active=document.activeElement; const aid=active&&active.id; const start=active&&active.selectionStart; const end=active&&active.selectionEnd; renderFn(); if(aid){ const el=document.getElementById(aid); if(el){ el.focus(); if(start!=null&&el.setSelectionRange){ try{ el.setSelectionRange(start,end); }catch(e){} } } } }
 
 /* helpers */
@@ -343,7 +355,7 @@ async function removePhoto(pid){
 
 /* render */
 const main=document.getElementById("main");
-function render(){ document.querySelectorAll("#nav button").forEach(b=>b.classList.toggle("active", b.dataset.tab===state.tab)); ({recipes:renderRecipes,favorites:renderFavorites,surprise:renderSurprise,kitchen:renderKitchen,week:renderWeek,shop:renderShop}[state.tab]||renderRecipes)(); }
+function render(){ document.querySelectorAll("#nav button").forEach(b=>b.classList.toggle("active", b.dataset.tab===state.tab)); ({recipes:renderRecipes,favorites:renderFavorites,surprise:renderSurprise,kitchen:renderKitchen,week:renderWeek,shop:renderShop,products:renderProducts}[state.tab]||renderRecipes)(); }
 function recipeCard(r){ const ings=r.ingredients.filter(i=>i.name).map(i=>i.qty?`${esc(i.qty)} ${esc(i.name)}`:esc(i.name)).slice(0,6).join(" · "); const shown=r.ingredients.filter(i=>i.name).length;
   return `<div class="card">${(photos[r.id]||r.photoUrl)?`<img src="${photos[r.id]||r.photoUrl}" alt="" onerror="this.style.display='none'" style="width:100%;height:160px;object-fit:cover;border-radius:10px;margin-bottom:11px;display:block;">`:""}<div class="cardhead"><p class="name" style="flex:1;">${esc(r.name)}</p><button class="starbtn ${r.favorite?'on':''}" data-act="fav" data-id="${r.id}" aria-label="Make again">${r.favorite?'★':'☆'}</button></div>${shown?`<div class="muted" style="font-size:13.5px;">${ings}${shown>6?" …":""}</div>`:""}${chipsFor(r)}<div class="cardactions"><button class="ghost tiny" data-act="addweek" data-id="${r.id}">＋ This week</button><button class="ghost tiny" data-act="edit" data-id="${r.id}">Edit</button>${r.pinterest?`<a class="ghost tiny" style="text-decoration:none; display:inline-flex; align-items:center;" href="${esc(r.pinterest)}" target="_blank" rel="noopener">Pin ↗</a>`:""}</div></div>`; }
 function groupBy(list,cats,keyOf){ let body=""; cats.forEach(c=>{ const g=list.filter(r=>(keyOf(r)||"Other")===c); if(!g.length) return; body+=`<h2 class="section">${esc(c)}</h2>`+g.map(recipeCard).join(""); }); return body; }
@@ -387,9 +399,110 @@ function renderWeek(){ const meals=state.weekMeals; if(!meals.length){ main.inne
   const rows=sorted.map(m=>{ const r=recipeById(m.recipeId); if(!r) return ""; const opts=[`<option value="">Any day</option>`,...DAYS.map(d=>`<option value="${d}" ${m.day===d?"selected":""}>${d}</option>`)].join(""); return `<div class="meal-row"><div class="mn" style="flex:1;">${esc(r.name)}${r.protein==="Seafood (his)"?' <span class="tag warn" style="margin-left:5px;">his</span>':''}</div><select class="daysel" data-act="setday" data-eid="${m.eid}">${opts}</select><button class="iconbtn" data-act="removemeal" data-eid="${m.eid}" aria-label="remove">✕</button></div>`; }).join("");
   main.innerHTML=`<h2 class="section">Meals this week</h2><div class="muted" style="font-size:13.5px; margin:-4px 0 12px;">${meals.length} meal${meals.length>1?"s":""} planned · a day is optional</div><div class="card" style="padding:4px 12px;">${rows}</div><button class="ghost" style="width:100%; margin-top:12px;" data-act="clearweek">Clear this week</button><p class="fab-note">Everything here flows into your Shopping list, grouped by store.</p>`; }
 function buildList(){ const map=new Map(); state.weekMeals.forEach(m=>{ const r=recipeById(m.recipeId); if(!r) return; r.ingredients.forEach(i=>{ if(!i.name) return; const store=i.store||"Unassigned"; const k=store+"||"+i.name.toLowerCase()+"||"+(i.brand||"").toLowerCase(); if(!map.has(k)) map.set(k,{key:k,name:i.name,brand:i.brand,store,qtys:[]}); if(i.qty) map.get(k).qtys.push(i.qty); }); }); state.manual.forEach(m=>{ map.set("M::"+m.id,{key:"M::"+m.id,name:m.name,brand:"",store:m.store||"Unassigned",qtys:[],manual:true}); }); return map; }
-function renderShop(){ const map=buildList(); const order=[...STORES,"Unassigned"]; let body="",total=0,done=0; order.forEach(store=>{ const items=[...map.values()].filter(i=>i.store===store); if(!items.length) return; total+=items.length; const rows=items.map(i=>{ const d=!!state.checked[i.key]; if(d) done++; const meta=[i.qtys.join(", "),i.brand].filter(Boolean).join(" · "); return `<div class="gitem ${d?'done':''}" data-act="check" data-key="${esc(i.key)}"><div class="box">${d?'✓':''}</div><div style="flex:1;"><div class="gname">${esc(i.name)}</div>${meta?`<div class="gmeta">${esc(meta)}</div>`:""}</div>${i.manual?`<button class="iconbtn" data-act="delmanual" data-key="${esc(i.key)}" aria-label="remove">✕</button>`:""}</div>`; }).join(""); body+=`<div class="storegroup"><div class="storehead"><span class="sh">${esc(store)}</span><span class="count">${items.length}</span></div>${rows}</div>`; });
-  main.innerHTML=`${total?`<div class="muted" style="font-size:13.5px; margin-bottom:12px;">${done} of ${total} gathered${done?` · <button class="link" data-act="clearchecked" style="padding:0;">reset checks</button>`:""}</div>`:""}${total?body:emptyBlock("Nothing to shop for yet","Add meals under This Week and your list builds itself, split by store.")}<div class="card" style="margin-top:6px;"><div class="lb">Add an item by hand</div><div class="ingrow"><input id="mItem" placeholder="e.g. paper towels" /><button class="ghost" data-act="addmanual" style="min-height:44px;">Add</button></div><select id="mStore">${STORES.map(s=>`<option>${s}</option>`).join("")}</select></div>`; }
+function renderShop(){ const map=buildList(); const order=[...STORES,"Unassigned"]; let body="",total=0,done=0; order.forEach(store=>{ const items=[...map.values()].filter(i=>i.store===store); if(!items.length) return; total+=items.length; const rows=items.map(i=>{ const d=!!state.checked[i.key]; if(d) done++; const meta=[i.qtys.join(", "),i.brand].filter(Boolean).join(" · "); const pid=state.productLinks[i.key]; const prod=pid?state.products.find(p=>p.id===pid):null; const cheap=prod?cheapestEntry(prod):null;
+    const priceLine=cheap?`<div class="gprice">$${cheap.price.toFixed(2)} <span class="muted">at ${esc(cheap.store)}</span> · <button type="button" class="link" data-act="linkitem" data-key="${esc(i.key)}" style="padding:0;">change</button></div>`:prod?`<div class="gprice muted">No prices saved yet · <button type="button" class="link" data-act="linkitem" data-key="${esc(i.key)}" style="padding:0;">add prices</button></div>`:`<div class="gprice"><button type="button" class="link" data-act="linkitem" data-key="${esc(i.key)}" style="padding:0;">🔎 Compare prices</button></div>`;
+    return `<div class="gitem ${d?'done':''}" data-act="check" data-key="${esc(i.key)}"><div class="box">${d?'✓':''}</div><div style="flex:1;"><div class="gname">${esc(i.name)}</div>${meta?`<div class="gmeta">${esc(meta)}</div>`:""}${priceLine}</div>${i.manual?`<button class="iconbtn" data-act="delmanual" data-key="${esc(i.key)}" aria-label="remove">✕</button>`:""}</div>`; }).join(""); body+=`<div class="storegroup"><div class="storehead"><span class="sh">${esc(store)}</span><span class="count">${items.length}</span></div>${rows}</div>`; });
+  main.innerHTML=`${total?`<div class="muted" style="font-size:13.5px; margin-bottom:12px;">${done} of ${total} gathered${done?` · <button class="link" data-act="clearchecked" style="padding:0;">reset checks</button>`:""}</div>`:""}${total?`<button class="btn" style="width:100%; margin-bottom:14px;" data-act="compareall">⚡ Compare stores for this list</button>`:""}${total?body:emptyBlock("Nothing to shop for yet","Add meals under This Week and your list builds itself, split by store.")}<div class="card" style="margin-top:6px;"><div class="lb">Add an item by hand</div><div class="ingrow"><input id="mItem" placeholder="e.g. paper towels" /><button class="ghost" data-act="addmanual" style="min-height:44px;">Add</button></div><select id="mStore">${STORES.map(s=>`<option>${s}</option>`).join("")}</select></div>`; }
 function emptyBlock(big,sub){ return `<div class="empty-block"><div class="big serif">${esc(big)}</div><div>${esc(sub)}</div></div>`; }
+
+/* product price catalog */
+function cheapestEntry(p){ const entries=STORES.filter(s=>p.prices&&p.prices[s]!=null).map(s=>({store:s,price:p.prices[s]})); if(!entries.length) return null; return entries.reduce((a,b)=>b.price<a.price?b:a); }
+function productMatchesQuery(p,q){ return p.name.toLowerCase().includes(q)||(p.brand||"").toLowerCase().includes(q); }
+function renderProducts(){
+  const q=(productSearchQuery||"").trim().toLowerCase();
+  const list=[...state.products].sort((a,b)=>a.name.localeCompare(b.name));
+  const filtered=q?list.filter(p=>productMatchesQuery(p,q)):list;
+  const rows=filtered.map(productCard).join("");
+  let body;
+  if(!list.length) body=emptyBlock("No products yet","Add anything you buy regularly and price it out per store, so it's ready to compare next time.");
+  else if(!filtered.length) body=emptyBlock("No matches",`Nothing found for “${esc(productSearchQuery)}”.`);
+  else body=rows;
+  main.innerHTML=`<h2 class="section">Price catalog</h2><div class="muted" style="font-size:13.5px; margin:-4px 0 12px;">Save prices you find in-store or online, then compare at a glance. Nothing here is looked up automatically.</div>
+    ${list.length?`<input type="search" id="productSearch" placeholder="Search products…" value="${esc(productSearchQuery)}" style="margin-bottom:10px;">`:""}
+    <button class="btn" style="width:100%; margin-bottom:14px;" data-act="addproduct">＋ Add a product</button>
+    ${body}
+    <p class="fab-note">Link a Shopping list item to a product to see the cheapest store right on your list.</p>`;
+}
+function productCard(p){ const cheap=cheapestEntry(p);
+  const cells=STORES.map(s=>{ const v=p.prices&&p.prices[s]; const isCheap=cheap&&v!=null&&s===cheap.store; return `<div class="pricecell ${isCheap?'cheap':''}"><div class="ps">${esc(s)}</div><input class="p-price" data-store="${esc(s)}" inputmode="decimal" placeholder="—" value="${v!=null?v:''}"></div>`; }).join("");
+  return `<div class="card product-card" data-id="${p.id}"><div class="cardhead"><div style="flex:1;"><p class="name" style="margin-bottom:2px;">${esc(p.name)}</p>${(p.brand||p.size)?`<div class="muted" style="font-size:12.5px;">${[esc(p.brand),esc(p.size)].filter(Boolean).join(" · ")}</div>`:""}</div><div class="row" style="gap:2px;"><button class="iconbtn" data-act="editproduct" data-id="${p.id}" aria-label="edit">✎</button><button class="iconbtn" data-act="delproduct" data-id="${p.id}" aria-label="remove">✕</button></div></div><div class="pricegrid">${cells}</div>${cheap?`<div class="muted" style="font-size:12.5px; margin-top:8px;">Cheapest: <b style="color:var(--safe);">$${cheap.price.toFixed(2)} at ${esc(cheap.store)}</b></div>`:""}</div>`;
+}
+function openProductForm(existing,prefillName,onSaved){
+  const p=existing||{name:prefillName||"",brand:"",size:"",prices:{}};
+  const overlay=document.createElement("div"); overlay.className="overlay"; const sheet=document.createElement("div"); sheet.className="sheet"; overlay.appendChild(sheet);
+  sheet.innerHTML=`<h3 class="serif">${existing?"Edit product":"New product"}</h3>
+    <label class="fld"><span class="lb">Product name</span><input id="pName" value="${esc(p.name)}" placeholder="e.g. Creamy peanut butter" /></label>
+    <div class="ingrow" style="grid-template-columns:1fr 1fr; grid-column:1/-1; margin-bottom:14px;">
+      <input id="pBrand" placeholder="Brand (optional)" value="${esc(p.brand||"")}" />
+      <input id="pSize" placeholder="Size (optional)" value="${esc(p.size||"")}" />
+    </div>
+    <div class="fld"><span class="lb">Prices per store</span><div class="pricegrid">${STORES.map(s=>`<div class="pricecell"><div class="ps">${esc(s)}</div><input class="pf-price" data-store="${esc(s)}" inputmode="decimal" placeholder="—" value="${p.prices&&p.prices[s]!=null?p.prices[s]:''}"></div>`).join("")}</div></div>
+    <div class="sheetactions"><button class="ghost" id="pCancel" style="flex:none;">Cancel</button>${existing?'<button class="ghost" id="pDelete" style="flex:none; color:var(--danger);">Delete</button>':''}<button class="btn" id="pSave">Save product</button></div>`;
+  document.body.appendChild(overlay);
+  const close=()=>overlay.remove();
+  overlay.addEventListener("click",e=>{ if(e.target===overlay) close(); });
+  sheet.querySelector("#pCancel").onclick=close;
+  if(existing) sheet.querySelector("#pDelete").onclick=()=>{ state.products=state.products.filter(x=>x.id!==existing.id); Object.keys(state.productLinks).forEach(k=>{ if(state.productLinks[k]===existing.id) delete state.productLinks[k]; }); close(); saveState(); render(); };
+  sheet.querySelector("#pSave").onclick=()=>{
+    const name=sheet.querySelector("#pName").value.trim(); if(!name){ sheet.querySelector("#pName").focus(); return; }
+    const prices={}; sheet.querySelectorAll(".pf-price").forEach(inp=>{ const raw=inp.value.trim(); if(raw){ const num=parseFloat(raw.replace(/[^0-9.]/g,"")); if(!isNaN(num)) prices[inp.dataset.store]=Math.round(num*100)/100; } });
+    const rec={id:existing?existing.id:id(),name,brand:sheet.querySelector("#pBrand").value.trim(),size:sheet.querySelector("#pSize").value.trim(),prices};
+    if(existing){ const i=state.products.findIndex(x=>x.id===existing.id); state.products[i]=rec; } else state.products.unshift(rec);
+    close(); saveState(); render(); if(onSaved) onSaved(rec);
+  };
+  setTimeout(()=>sheet.querySelector("#pName").focus(),50);
+}
+function openLinkPicker(key,itemName){
+  const overlay=document.createElement("div"); overlay.className="overlay"; const sheet=document.createElement("div"); sheet.className="sheet"; overlay.appendChild(sheet);
+  const currentId=state.productLinks[key];
+  function optsHtml(q){
+    const ql=(q||"").trim().toLowerCase();
+    const list=state.products.filter(p=>!ql||productMatchesQuery(p,ql)).sort((a,b)=>a.name.localeCompare(b.name)).slice(0,25);
+    if(!list.length) return `<div class="muted" style="font-size:13.5px; padding:8px 2px;">No saved products match. Add one below.</div>`;
+    return list.map(p=>{ const cheap=cheapestEntry(p); return `<div class="linkopt ${p.id===currentId?'sel':''}" data-act="pickproduct" data-id="${p.id}"><div style="flex:1;"><div class="gname" style="font-size:14.5px;">${esc(p.name)}</div><div class="muted" style="font-size:12px;">${[esc(p.brand),esc(p.size)].filter(Boolean).join(" · ")||"&nbsp;"}</div></div>${cheap?`<div style="font-size:13px; font-weight:700; color:var(--safe);">$${cheap.price.toFixed(2)}</div>`:'<div class="muted" style="font-size:12px;">no prices</div>'}</div>`; }).join("");
+  }
+  sheet.innerHTML=`<h3 class="serif">Compare “${esc(itemName)}”</h3>
+    <div class="muted" style="font-size:13px; margin:-8px 0 12px;">Pick a saved product to compare its price across stores, or add a new one.</div>
+    <input type="search" id="lpSearch" placeholder="Search your products…" value="${esc(itemName)}" style="margin-bottom:10px;">
+    <div id="lpList">${optsHtml(itemName)}</div>
+    ${currentId?`<button class="ghost" id="lpUnlink" style="width:100%; margin-top:10px; color:var(--danger);">Unlink product</button>`:""}
+    <button class="btn" id="lpNew" style="width:100%; margin-top:12px;">＋ Add “${esc(itemName)}” as a new product</button>
+    <div class="sheetactions"><button class="ghost" id="lpCancel" style="flex:1;">Close</button></div>`;
+  document.body.appendChild(overlay);
+  const close=()=>overlay.remove();
+  overlay.addEventListener("click",e=>{ if(e.target===overlay) close(); });
+  sheet.querySelector("#lpCancel").onclick=close;
+  sheet.querySelector("#lpSearch").addEventListener("input",e=>{ sheet.querySelector("#lpList").innerHTML=optsHtml(e.target.value); });
+  sheet.querySelector("#lpList").addEventListener("click",e=>{ const o=e.target.closest("[data-act='pickproduct']"); if(!o) return; state.productLinks[key]=o.dataset.id; saveState(); close(); renderShop(); toast("Linked"); });
+  const unlinkBtn=sheet.querySelector("#lpUnlink"); if(unlinkBtn) unlinkBtn.onclick=()=>{ delete state.productLinks[key]; saveState(); close(); renderShop(); };
+  sheet.querySelector("#lpNew").onclick=()=>{ close(); openProductForm(null,itemName,rec=>{ state.productLinks[key]=rec.id; saveState(); renderShop(); }); };
+}
+function openCompareAll(){
+  const items=[...buildList().values()];
+  const linked=items.map(i=>({item:i,product:state.productLinks[i.key]?state.products.find(p=>p.id===state.productLinks[i.key]):null}));
+  const priced=linked.filter(x=>x.product&&cheapestEntry(x.product));
+  const unmatched=linked.filter(x=>!x.product);
+  const noPriceYet=linked.filter(x=>x.product&&!cheapestEntry(x.product));
+  const overlay=document.createElement("div"); overlay.className="overlay"; const sheet=document.createElement("div"); sheet.className="sheet"; overlay.appendChild(sheet);
+  let body;
+  if(!priced.length){
+    body=`<div class="muted" style="font-size:13.5px;">None of your ${items.length} item${items.length===1?"":"s"} have saved prices yet. Tap “Compare prices” on a Shopping list item to link it to a product, or add prices in the Products tab, then try again.</div>`;
+  } else {
+    let bestTotal=0; const perStoreCount={};
+    priced.forEach(x=>{ const c=cheapestEntry(x.product); bestTotal+=c.price; perStoreCount[c.store]=(perStoreCount[c.store]||0)+1; });
+    const splitLine=Object.entries(perStoreCount).sort((a,b)=>b[1]-a[1]).map(([s,n])=>`${n} at ${esc(s)}`).join(" · ");
+    const singleRows=STORES.map(s=>{ let sum=0,count=0; priced.forEach(x=>{ const v=x.product.prices&&x.product.prices[s]; if(v!=null){ sum+=v; count++; } }); return {store:s,sum,count}; }).filter(r=>r.count>0).sort((a,b)=>a.sum-b.sum);
+    body=`<div class="card" style="border-color:var(--accent-dim);"><div class="lb">Best split (cheapest per item)</div><div style="font-family:var(--display); font-size:24px; margin:4px 0 2px;">$${bestTotal.toFixed(2)}</div><div class="muted" style="font-size:12.5px;">${splitLine}</div></div>
+      <div class="lb" style="margin:16px 0 8px;">One-stop totals</div>
+      ${singleRows.map(r=>`<div class="row between" style="padding:9px 2px; border-top:1px solid var(--border);"><div>${esc(r.store)} <span class="muted" style="font-size:12px;">(${r.count}/${priced.length} priced)</span></div><div style="font-weight:700;">$${r.sum.toFixed(2)}</div></div>`).join("")}
+      ${(unmatched.length||noPriceYet.length)?`<div class="muted" style="font-size:12.5px; margin-top:14px;">${unmatched.length?`${unmatched.length} item${unmatched.length===1?"":"s"} not linked to a product yet. `:""}${noPriceYet.length?`${noPriceYet.length} linked item${noPriceYet.length===1?"":"s"} still need${noPriceYet.length===1?"s":""} a price. `:""}These aren't counted above.</div>`:""}`;
+  }
+  sheet.innerHTML=`<h3 class="serif">Compare stores</h3>${body}<div class="sheetactions"><button class="btn" id="caClose" style="flex:1;">Done</button></div>`;
+  document.body.appendChild(overlay);
+  const close=()=>overlay.remove();
+  overlay.addEventListener("click",e=>{ if(e.target===overlay) close(); });
+  sheet.querySelector("#caClose").onclick=close;
+}
 
 /* settings */
 function openSettings(){
@@ -440,6 +553,8 @@ async function importBackupFile(file){
   if(!state.filters) state.filters=[];
   if(!state.checked) state.checked={};
   if(!state.manual) state.manual=[];
+  if(!state.products) state.products=[];
+  if(!state.productLinks) state.productLinks={};
   if(!state.importedIds) state.importedIds=[];
   if(!state.theme) state.theme="crimson";
   if(!state.bg) state.bg="wallpaper";
@@ -523,11 +638,22 @@ main.addEventListener("click", e=>{ const t=e.target.closest("[data-act]"); if(!
   if(act==="clearchecked"){ state.checked={}; saveState(); return renderShop(); }
   if(act==="addmanual"){ const inp=document.getElementById("mItem"); const v=inp.value.trim(); if(!v) return; state.manual.push({id:id(),name:v,store:document.getElementById("mStore").value}); saveState(); return renderShop(); }
   if(act==="delmanual"){ const mid=t.dataset.key.replace("M::",""); state.manual=state.manual.filter(m=>m.id!==mid); delete state.checked[t.dataset.key]; saveState(); return renderShop(); }
+  if(act==="linkitem"){ const item=buildList().get(t.dataset.key); return openLinkPicker(t.dataset.key, item?item.name:""); }
+  if(act==="compareall") return openCompareAll();
+  if(act==="addproduct") return openProductForm(null,"",null);
+  if(act==="editproduct") return openProductForm(state.products.find(p=>p.id===t.dataset.id));
+  if(act==="delproduct"){ const pid=t.dataset.id; state.products=state.products.filter(p=>p.id!==pid); Object.keys(state.productLinks).forEach(k=>{ if(state.productLinks[k]===pid) delete state.productLinks[k]; }); saveState(); return renderProducts(); }
 });
-main.addEventListener("change", e=>{ const s=e.target.closest("select[data-act='setday']"); if(!s) return; const m=state.weekMeals.find(x=>x.eid===s.dataset.eid); if(m){ m.day=s.value; saveState(); renderWeek(); } });
+main.addEventListener("change", e=>{
+  const s=e.target.closest("select[data-act='setday']");
+  if(s){ const m=state.weekMeals.find(x=>x.eid===s.dataset.eid); if(m){ m.day=s.value; saveState(); renderWeek(); } return; }
+  const pf=e.target.closest(".p-price");
+  if(pf){ const card=pf.closest(".product-card"); if(!card) return; const p=state.products.find(x=>x.id===card.dataset.id); if(!p) return; const store=pf.dataset.store; const raw=pf.value.trim(); if(!p.prices) p.prices={}; if(!raw){ delete p.prices[store]; } else { const num=parseFloat(raw.replace(/[^0-9.]/g,"")); if(!isNaN(num)) p.prices[store]=Math.round(num*100)/100; } saveState(); return renderProducts(); }
+});
 main.addEventListener("input", e=>{
   if(e.target.id==="recipeSearch"){ searchQuery=e.target.value; return withFocusPreserved(renderRecipes); }
   if(e.target.id==="favSearch"){ favSearchQuery=e.target.value; return withFocusPreserved(renderFavorites); }
+  if(e.target.id==="productSearch"){ productSearchQuery=e.target.value; return withFocusPreserved(renderProducts); }
 });
 
 /* boot */
@@ -542,6 +668,8 @@ main.addEventListener("input", e=>{
     if(!state.filters) state.filters=[];
     if(!state.checked) state.checked={};
     if(!state.manual) state.manual=[];
+    if(!state.products) state.products=[];
+    if(!state.productLinks) state.productLinks={};
     if(!state.tab) state.tab="recipes";
     if(!state.theme) state.theme="crimson";
     if(!state.bg) state.bg="wallpaper";
