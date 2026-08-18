@@ -2,7 +2,9 @@ name: Deploy to GitHub Pages
 
 on:
   push:
-    branches: ["claude/pinterest-scrape-meal-app-pul7v0"]
+    branches:
+      - "claude/pinterest-scrape-meal-app-pul7v0"
+      - "claude/app-development-continuation-q9xpdm"
   workflow_dispatch:
 
 permissions:
