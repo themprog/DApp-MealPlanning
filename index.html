@@ -315,6 +315,17 @@ async function saveState(){
   try{ if(window.storage) await window.storage.set(KEY, json); }catch(e){}
   try{ localStorage.setItem(KEY, json); }catch(e){}
 }
+/* kept out of state/backups on purpose — this is a credential, not app data */
+const APIKEY_KEY="mpApiKey";
+async function loadApiKey(){
+  try{ if(window.storage){ const r=await window.storage.get(APIKEY_KEY); if(r&&r.value) return r.value; } }catch(e){}
+  try{ return localStorage.getItem(APIKEY_KEY)||""; }catch(e){ return ""; }
+}
+async function saveApiKey(k){
+  apiKey=k;
+  try{ if(window.storage) await window.storage.set(APIKEY_KEY,k); }catch(e){}
+  try{ localStorage.setItem(APIKEY_KEY,k); }catch(e){}
+}
 function id(){ return Math.random().toString(36).slice(2,10); }
 function seed(){
   return { theme:"crimson", bg:"wallpaper", font:"spooky", themedV2:true, fontSet:true, bgV3:true, appliances:["Crockpot","Instant Pot"],
@@ -326,7 +337,7 @@ function seed(){
     ],
     weekMeals:[], filters:[], checked:{}, manual:[], products:[], productLinks:{}, tab:"recipes" };
 }
-let state; let surprisePick=null; let searchQuery=""; let favSearchQuery=""; let productSearchQuery="";
+let state; let surprisePick=null; let searchQuery=""; let favSearchQuery=""; let productSearchQuery=""; let apiKey="";
 function withFocusPreserved(renderFn){ const active=document.activeElement; const aid=active&&active.id; const start=active&&active.selectionStart; const end=active&&active.selectionEnd; renderFn(); if(aid){ const el=document.getElementById(aid); if(el){ el.focus(); if(start!=null&&el.setSelectionRange){ try{ el.setSelectionRange(start,end); }catch(e){} } } } }
 
 /* helpers */
@@ -417,18 +428,22 @@ function renderProducts(){
   if(!list.length) body=emptyBlock("No products yet","Add anything you buy regularly and price it out per store, so it's ready to compare next time.");
   else if(!filtered.length) body=emptyBlock("No matches",`Nothing found for “${esc(productSearchQuery)}”.`);
   else body=rows;
-  main.innerHTML=`<h2 class="section">Price catalog</h2><div class="muted" style="font-size:13.5px; margin:-4px 0 12px;">Save prices you find in-store or online, then compare at a glance. Nothing here is looked up automatically.</div>
+  main.innerHTML=`<h2 class="section">Price catalog</h2><div class="muted" style="font-size:13.5px; margin:-4px 0 12px;">Save prices by hand, or look them up on Amazon &amp; Walmart with your RapidAPI key (set it in Settings). Target &amp; Safeway stay manual for now — no keyword-search API available for either.</div>
     ${list.length?`<input type="search" id="productSearch" placeholder="Search products…" value="${esc(productSearchQuery)}" style="margin-bottom:10px;">`:""}
-    <button class="btn" style="width:100%; margin-bottom:14px;" data-act="addproduct">＋ Add a product</button>
+    <div class="row" style="gap:8px; margin-bottom:14px;">
+      <button class="btn" style="flex:1;" data-act="addproduct">＋ Add a product</button>
+      <button class="ghost" style="flex:1;" data-act="lookuponline">🔍 Look up online</button>
+    </div>
     ${body}
     <p class="fab-note">Link a Shopping list item to a product to see the cheapest store right on your list.</p>`;
 }
 function productCard(p){ const cheap=cheapestEntry(p);
   const cells=STORES.map(s=>{ const v=p.prices&&p.prices[s]; const isCheap=cheap&&v!=null&&s===cheap.store; return `<div class="pricecell ${isCheap?'cheap':''}"><div class="ps">${esc(s)}</div><input class="p-price" data-store="${esc(s)}" inputmode="decimal" placeholder="—" value="${v!=null?v:''}"></div>`; }).join("");
-  return `<div class="card product-card" data-id="${p.id}"><div class="cardhead"><div style="flex:1;"><p class="name" style="margin-bottom:2px;">${esc(p.name)}</p>${(p.brand||p.size)?`<div class="muted" style="font-size:12.5px;">${[esc(p.brand),esc(p.size)].filter(Boolean).join(" · ")}</div>`:""}</div><div class="row" style="gap:2px;"><button class="iconbtn" data-act="editproduct" data-id="${p.id}" aria-label="edit">✎</button><button class="iconbtn" data-act="delproduct" data-id="${p.id}" aria-label="remove">✕</button></div></div><div class="pricegrid">${cells}</div>${cheap?`<div class="muted" style="font-size:12.5px; margin-top:8px;">Cheapest: <b style="color:var(--safe);">$${cheap.price.toFixed(2)} at ${esc(cheap.store)}</b></div>`:""}</div>`;
+  return `<div class="card product-card" data-id="${p.id}"><div class="cardhead"><div style="flex:1;"><p class="name" style="margin-bottom:2px;">${esc(p.name)}</p>${(p.brand||p.size)?`<div class="muted" style="font-size:12.5px;">${[esc(p.brand),esc(p.size)].filter(Boolean).join(" · ")}</div>`:""}</div><div class="row" style="gap:2px;"><button class="iconbtn" data-act="editproduct" data-id="${p.id}" aria-label="edit">✎</button><button class="iconbtn" data-act="delproduct" data-id="${p.id}" aria-label="remove">✕</button></div></div><div class="pricegrid">${cells}</div>${cheap?`<div class="muted" style="font-size:12.5px; margin-top:8px;">Cheapest: <b style="color:var(--safe);">$${cheap.price.toFixed(2)} at ${esc(cheap.store)}</b></div>`:""}${p.dealNotes?`<div class="muted" style="font-size:12px; margin-top:6px; white-space:pre-line; border-top:1px solid var(--border); padding-top:6px;">🏷 ${esc(p.dealNotes)}</div>`:""}</div>`;
 }
-function openProductForm(existing,prefillName,onSaved){
-  const p=existing||{name:prefillName||"",brand:"",size:"",prices:{}};
+function openProductForm(existing,prefill,onSaved){
+  const pf=prefill||{};
+  const p=existing||{name:pf.name||"",brand:pf.brand||"",size:pf.size||"",prices:pf.prices||{},dealNotes:pf.dealNotes||""};
   const overlay=document.createElement("div"); overlay.className="overlay"; const sheet=document.createElement("div"); sheet.className="sheet"; overlay.appendChild(sheet);
   sheet.innerHTML=`<h3 class="serif">${existing?"Edit product":"New product"}</h3>
     <label class="fld"><span class="lb">Product name</span><input id="pName" value="${esc(p.name)}" placeholder="e.g. Creamy peanut butter" /></label>
@@ -437,6 +452,7 @@ function openProductForm(existing,prefillName,onSaved){
       <input id="pSize" placeholder="Size (optional)" value="${esc(p.size||"")}" />
     </div>
     <div class="fld"><span class="lb">Prices per store</span><div class="pricegrid">${STORES.map(s=>`<div class="pricecell"><div class="ps">${esc(s)}</div><input class="pf-price" data-store="${esc(s)}" inputmode="decimal" placeholder="—" value="${p.prices&&p.prices[s]!=null?p.prices[s]:''}"></div>`).join("")}</div></div>
+    <label class="fld"><span class="lb">Deal / coupon notes (optional)</span><textarea id="pDealNotes" placeholder="e.g. Target: clip $1 digital coupon; Amazon: was $5.12, on sale for $4.67">${esc(p.dealNotes||"")}</textarea></label>
     <div class="sheetactions"><button class="ghost" id="pCancel" style="flex:none;">Cancel</button>${existing?'<button class="ghost" id="pDelete" style="flex:none; color:var(--danger);">Delete</button>':''}<button class="btn" id="pSave">Save product</button></div>`;
   document.body.appendChild(overlay);
   const close=()=>overlay.remove();
@@ -446,7 +462,7 @@ function openProductForm(existing,prefillName,onSaved){
   sheet.querySelector("#pSave").onclick=()=>{
     const name=sheet.querySelector("#pName").value.trim(); if(!name){ sheet.querySelector("#pName").focus(); return; }
     const prices={}; sheet.querySelectorAll(".pf-price").forEach(inp=>{ const raw=inp.value.trim(); if(raw){ const num=parseFloat(raw.replace(/[^0-9.]/g,"")); if(!isNaN(num)) prices[inp.dataset.store]=Math.round(num*100)/100; } });
-    const rec={id:existing?existing.id:id(),name,brand:sheet.querySelector("#pBrand").value.trim(),size:sheet.querySelector("#pSize").value.trim(),prices};
+    const rec={id:existing?existing.id:id(),name,brand:sheet.querySelector("#pBrand").value.trim(),size:sheet.querySelector("#pSize").value.trim(),prices,dealNotes:sheet.querySelector("#pDealNotes").value.trim()};
     if(existing){ const i=state.products.findIndex(x=>x.id===existing.id); state.products[i]=rec; } else state.products.unshift(rec);
     close(); saveState(); render(); if(onSaved) onSaved(rec);
   };
@@ -466,7 +482,8 @@ function openLinkPicker(key,itemName){
     <input type="search" id="lpSearch" placeholder="Search your products…" value="${esc(itemName)}" style="margin-bottom:10px;">
     <div id="lpList">${optsHtml(itemName)}</div>
     ${currentId?`<button class="ghost" id="lpUnlink" style="width:100%; margin-top:10px; color:var(--danger);">Unlink product</button>`:""}
-    <button class="btn" id="lpNew" style="width:100%; margin-top:12px;">＋ Add “${esc(itemName)}” as a new product</button>
+    <button class="ghost" id="lpLookup" style="width:100%; margin-top:12px;">🔍 Look up online</button>
+    <button class="btn" id="lpNew" style="width:100%; margin-top:10px;">＋ Add “${esc(itemName)}” as a new product</button>
     <div class="sheetactions"><button class="ghost" id="lpCancel" style="flex:1;">Close</button></div>`;
   document.body.appendChild(overlay);
   const close=()=>overlay.remove();
@@ -475,7 +492,96 @@ function openLinkPicker(key,itemName){
   sheet.querySelector("#lpSearch").addEventListener("input",e=>{ sheet.querySelector("#lpList").innerHTML=optsHtml(e.target.value); });
   sheet.querySelector("#lpList").addEventListener("click",e=>{ const o=e.target.closest("[data-act='pickproduct']"); if(!o) return; state.productLinks[key]=o.dataset.id; saveState(); close(); renderShop(); toast("Linked"); });
   const unlinkBtn=sheet.querySelector("#lpUnlink"); if(unlinkBtn) unlinkBtn.onclick=()=>{ delete state.productLinks[key]; saveState(); close(); renderShop(); };
-  sheet.querySelector("#lpNew").onclick=()=>{ close(); openProductForm(null,itemName,rec=>{ state.productLinks[key]=rec.id; saveState(); renderShop(); }); };
+  sheet.querySelector("#lpLookup").onclick=()=>{ close(); openOnlineLookup(itemName,draft=>{ openProductForm(null,draft,rec=>{ state.productLinks[key]=rec.id; saveState(); renderShop(); }); }); };
+  sheet.querySelector("#lpNew").onclick=()=>{ close(); openProductForm(null,{name:itemName},rec=>{ state.productLinks[key]=rec.id; saveState(); renderShop(); }); };
+}
+
+/* online price lookup — RapidAPI, client-side only, key never leaves this device */
+function parseMoney(s){ if(s==null||s==="") return null; const n=parseFloat(String(s).replace(/[^0-9.]/g,"")); return isNaN(n)?null:Math.round(n*100)/100; }
+const LOOKUP_CACHE_TTL=12*60*60*1000; /* stretch a limited free-tier quota across repeat lookups of the same staple items */
+function lookupCacheGet(store,q){
+  try{ const raw=localStorage.getItem("mpLookupCache:"+store+":"+q); if(!raw) return null; const obj=JSON.parse(raw); if(Date.now()-obj.ts>LOOKUP_CACHE_TTL) return null; return obj; }catch(e){ return null; }
+}
+function lookupCacheSet(store,q,results){ try{ localStorage.setItem("mpLookupCache:"+store+":"+q, JSON.stringify({ts:Date.now(),results})); }catch(e){} }
+const LOOKUP_PROVIDERS=[
+  { store:"Amazon", host:"real-time-amazon-data.p.rapidapi.com",
+    buildUrl:q=>`https://real-time-amazon-data.p.rapidapi.com/search?query=${encodeURIComponent(q)}&page=1&country=US&sort_by=RELEVANCE&product_condition=ALL&is_prime=false&deals_and_discounts=NONE`,
+    parse:json=>((json&&json.data&&json.data.products)||[]).slice(0,6).map(p=>{ const price=parseMoney(p.product_price); const was=parseMoney(p.product_original_price); return { title:p.product_title, sub:p.product_byline||"", price, originalPrice:(was&&price&&was>price)?was:null, image:p.product_photo||"" }; }).filter(x=>x.title) },
+  { store:"Walmart", host:"axesso-walmart-data-service.p.rapidapi.com",
+    buildUrl:q=>`https://axesso-walmart-data-service.p.rapidapi.com/wlm/walmart-search-by-keyword?keyword=${encodeURIComponent(q)}&page=1&sortBy=best_match`,
+    parse:json=>{ const stacks=json&&json.item&&json.item.props&&json.item.props.pageProps&&json.item.props.pageProps.initialData&&json.item.props.pageProps.initialData.searchResult&&json.item.props.pageProps.initialData.searchResult.itemStacks; const items=(stacks&&stacks[0]&&stacks[0].items)||[]; return items.slice(0,6).map(it=>{ const lines=(it.priceInfo&&it.priceInfo.priceDetails&&it.priceInfo.priceDetails.priceLines)||[]; const cur=lines.find(l=>l.lineType==="CURRENT_PRICE"); const price=(cur&&cur.values&&cur.values[0])?parseMoney(cur.values[0].value):null; const was=parseMoney(it.priceInfo&&it.priceInfo.wasPrice); return { title:it.name, sub:"", price, originalPrice:(was&&price&&was>price)?was:null, image:it.image||"" }; }).filter(x=>x.title&&x.price!=null); } },
+];
+async function lookupOnline(query){
+  const q=(query||"").trim().toLowerCase(); if(!q) return {};
+  const out={};
+  await Promise.all(LOOKUP_PROVIDERS.map(async prov=>{
+    if(!apiKey){ out[prov.store]={error:"No API key saved — add one in Settings."}; return; }
+    const cached=lookupCacheGet(prov.store,q);
+    if(cached){ out[prov.store]={results:cached.results,cached:true}; return; }
+    try{
+      const res=await fetch(prov.buildUrl(q),{headers:{"x-rapidapi-key":apiKey,"x-rapidapi-host":prov.host}});
+      if(!res.ok){ out[prov.store]={error:`HTTP ${res.status}`}; return; }
+      const json=await res.json();
+      const results=prov.parse(json);
+      lookupCacheSet(prov.store,q,results);
+      out[prov.store]={results};
+    }catch(e){ out[prov.store]={error:"Request failed"}; }
+  }));
+  return out;
+}
+function openOnlineLookup(initialQuery,onUse){
+  const overlay=document.createElement("div"); overlay.className="overlay"; const sheet=document.createElement("div"); sheet.className="sheet"; overlay.appendChild(sheet);
+  const picks={}; let lastData={};
+  sheet.innerHTML=`<h3 class="serif">Look up online</h3>
+    <div class="muted" style="font-size:13px; margin:-8px 0 12px;">Searches Amazon &amp; Walmart with your saved RapidAPI key. Results are cached for 12 hours so repeat lookups don't cost extra quota. Pick the right match per store — nothing saves until you confirm.</div>
+    ${apiKey?"":`<div class="muted" style="font-size:13px; margin-bottom:10px; color:var(--warn);">No RapidAPI key saved yet — add one in Settings first.</div>`}
+    <div class="row" style="gap:8px; margin-bottom:12px;"><input id="olQuery" value="${esc(initialQuery||"")}" placeholder="Search term" style="flex:1;" /><button class="ghost" id="olGo" style="min-height:44px;">Search</button></div>
+    <div id="olResults"></div>
+    <div class="sheetactions"><button class="ghost" id="olCancel" style="flex:1;">Cancel</button><button class="btn" id="olUse" style="flex:1;" disabled>Use selected</button></div>`;
+  document.body.appendChild(overlay);
+  const close=()=>overlay.remove();
+  overlay.addEventListener("click",e=>{ if(e.target===overlay) close(); });
+  sheet.querySelector("#olCancel").onclick=close;
+  const resultsEl=sheet.querySelector("#olResults");
+  const useBtn=sheet.querySelector("#olUse");
+  function refreshUseBtn(){ useBtn.disabled=Object.keys(picks).length===0; }
+  function rowHtml(store,items){
+    if(!items.length) return `<div class="muted" style="font-size:13px;">No matches.</div>`;
+    return items.map((it,idx)=>{
+      const sel=picks[store]&&picks[store]._idx===idx;
+      const saleBit=it.originalPrice?`<span style="text-decoration:line-through; color:var(--faint); font-weight:400;">$${it.originalPrice.toFixed(2)}</span>`:"";
+      return `<div class="linkopt ${sel?'sel':''}" data-act="olpick" data-store="${esc(store)}" data-idx="${idx}">${it.image?`<img src="${esc(it.image)}" alt="" style="width:38px;height:38px;object-fit:cover;border-radius:6px;flex:none;">`:""}<div style="flex:1;"><div class="gname" style="font-size:14px;">${esc(it.title)}</div>${it.sub?`<div class="muted" style="font-size:12px;">${esc(it.sub)}</div>`:""}</div><div style="text-align:right;">${it.price!=null?`<div style="font-size:13px; font-weight:700;">$${it.price.toFixed(2)}</div>`:'<div class="muted" style="font-size:12px;">no price</div>'}${saleBit?`<div style="font-size:11px;">${saleBit}</div>`:""}</div></div>`;
+    }).join("");
+  }
+  async function runSearch(){
+    const q=sheet.querySelector("#olQuery").value.trim(); if(!q) return;
+    resultsEl.innerHTML=`<div class="muted" style="padding:10px 2px;">Searching…</div>`;
+    lastData=await lookupOnline(q);
+    resultsEl.innerHTML=LOOKUP_PROVIDERS.map(prov=>{
+      const d=lastData[prov.store]||{};
+      const meta=d.cached?` <span class="muted" style="font-size:11px;">(cached — free)</span>`:"";
+      if(d.error) return `<div class="lb" style="margin-top:14px;">${esc(prov.store)}</div><div class="muted" style="font-size:13px;">${esc(d.error)}</div>`;
+      return `<div class="lb" style="margin-top:14px;">${esc(prov.store)}${meta}</div>${rowHtml(prov.store,d.results||[])}`;
+    }).join("");
+    refreshUseBtn();
+  }
+  resultsEl.addEventListener("click",e=>{
+    const o=e.target.closest("[data-act='olpick']"); if(!o) return;
+    const store=o.dataset.store, idx=+o.dataset.idx;
+    const items=(lastData[store]&&lastData[store].results)||[]; const item=items[idx]; if(!item) return;
+    const already=picks[store]&&picks[store]._idx===idx;
+    if(already) delete picks[store]; else picks[store]={title:item.title,price:item.price,originalPrice:item.originalPrice,_idx:idx};
+    resultsEl.querySelectorAll(`[data-act='olpick'][data-store='${store}']`).forEach(el=>el.classList.remove("sel"));
+    if(picks[store]) o.classList.add("sel");
+    refreshUseBtn();
+  });
+  sheet.querySelector("#olGo").onclick=runSearch;
+  useBtn.onclick=()=>{
+    const prices={}; let name=""; const saleNotes=[];
+    Object.entries(picks).forEach(([store,p])=>{ if(p.price!=null) prices[store]=p.price; if(!name) name=p.title; if(p.originalPrice) saleNotes.push(`${store}: $${p.price.toFixed(2)} (was $${p.originalPrice.toFixed(2)})`); });
+    close(); onUse({name,prices,dealNotes:saleNotes.join("\n")});
+  };
+  if(initialQuery&&apiKey) runSearch();
 }
 function openCompareAll(){
   const items=[...buildList().values()];
@@ -511,7 +617,13 @@ function openSettings(){
   const themeOpts=THEMES.map(th=>`<button class="opt ${state.theme===th.id?'sel':''}" data-kind="theme" data-id="${th.id}"><span class="sw" style="background:${th.vars.bg}"><span class="dot" style="background:${th.vars.accent}"></span></span><span class="optname">${esc(th.name)}</span></button>`).join("");
   const bgOpts=BGS.map(b=>`<button class="opt ${state.bg===b.id?'sel':''}" data-kind="bg" data-id="${b.id}"><span class="sw" style="background-color:var(--surface); background-image:${bgCss(b)}; background-size:${b.cover?'cover':(b.size||'auto')};"></span><span class="optname">${esc(b.name)}</span></button>`).join("");
   sheet.innerHTML=`<h3 class="serif">Make it yours</h3><div class="lb">Text style</div><div class="optgrid">${fontOpts}</div><div class="lb" style="margin-top:16px;">Color theme</div><div class="optgrid">${themeOpts}</div><div class="lb" style="margin-top:16px;">Background</div><div class="optgrid">${bgOpts}</div>
-    <div class="lb" style="margin-top:16px;">Your data</div>
+    <div class="lb" style="margin-top:16px;">Price lookup</div>
+    <div class="muted" style="font-size:12.5px; margin:-2px 0 10px;">Paste your RapidAPI key to search Amazon &amp; Walmart for prices from the Products tab. Stored only on this device — never included in backups, and never written into the app's source file.</div>
+    <div class="row" style="gap:8px; margin-bottom:16px;">
+      <input type="password" id="sApiKey" placeholder="RapidAPI key" value="${esc(apiKey)}" style="flex:1;">
+      <button type="button" class="ghost" id="sApiKeySave">Save</button>
+    </div>
+    <div class="lb">Your data</div>
     <div class="muted" style="font-size:12.5px; margin:-2px 0 10px;">Everything lives only on this device. Save a backup now and then so you never lose your recipes.</div>
     <div class="row" style="gap:8px;">
       <button type="button" class="ghost" id="sExport" style="flex:1;">⬇ Export backup</button>
@@ -524,6 +636,7 @@ function openSettings(){
   overlay.addEventListener("click",e=>{ if(e.target===overlay) close(); });
   sheet.querySelector("#sDone").onclick=close;
   sheet.querySelectorAll(".opt").forEach(o=>o.onclick=()=>{ const kind=o.dataset.kind, idv=o.dataset.id; if(kind==="theme") applyTheme(idv); else if(kind==="bg") applyBg(idv); else applyFont(idv); sheet.querySelectorAll(`.opt[data-kind='${kind}']`).forEach(x=>x.classList.toggle("sel", x===o)); saveState(); });
+  sheet.querySelector("#sApiKeySave").onclick=async()=>{ const v=sheet.querySelector("#sApiKey").value.trim(); await saveApiKey(v); toast(v?"Key saved":"Key cleared"); };
   sheet.querySelector("#sExport").onclick=exportBackup;
   const importInput=sheet.querySelector("#sImportInput");
   sheet.querySelector("#sImport").onclick=()=>importInput.click();
@@ -640,9 +753,10 @@ main.addEventListener("click", e=>{ const t=e.target.closest("[data-act]"); if(!
   if(act==="delmanual"){ const mid=t.dataset.key.replace("M::",""); state.manual=state.manual.filter(m=>m.id!==mid); delete state.checked[t.dataset.key]; saveState(); return renderShop(); }
   if(act==="linkitem"){ const item=buildList().get(t.dataset.key); return openLinkPicker(t.dataset.key, item?item.name:""); }
   if(act==="compareall") return openCompareAll();
-  if(act==="addproduct") return openProductForm(null,"",null);
+  if(act==="addproduct") return openProductForm(null,null,null);
   if(act==="editproduct") return openProductForm(state.products.find(p=>p.id===t.dataset.id));
   if(act==="delproduct"){ const pid=t.dataset.id; state.products=state.products.filter(p=>p.id!==pid); Object.keys(state.productLinks).forEach(k=>{ if(state.productLinks[k]===pid) delete state.productLinks[k]; }); saveState(); return renderProducts(); }
+  if(act==="lookuponline") return openOnlineLookup("",draft=>openProductForm(null,draft,null));
 });
 main.addEventListener("change", e=>{
   const s=e.target.closest("select[data-act='setday']");
@@ -688,6 +802,7 @@ main.addEventListener("input", e=>{
   if(!state.photoUrlV1){ state.recipes.forEach(r=>{ if(!r.photoUrl && !r.photo && PHOTOURLS[r.name]) r.photoUrl=PHOTOURLS[r.name]; }); state.photoUrlV1=true; saveState(); }
   if(!state.mealView) state.mealView="Dinner";
   await Promise.all(state.recipes.filter(r=>r.photo).map(r=>loadPhoto(r.id)));
+  apiKey=await loadApiKey();
   applyTheme(state.theme); applyFont(state.font); applyBg(state.bg);
   render();
 })();
