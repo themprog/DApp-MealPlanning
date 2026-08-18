@@ -1,10 +1,8 @@
 name: Deploy to GitHub Pages
 
 on:
-  push:
-    branches:
-      - "claude/pinterest-scrape-meal-app-pul7v0"
-      - "claude/app-development-continuation-q9xpdm"
+  # Manual only for now — this repo is hosted on Cloudflare Pages instead.
+  # Flip this back to a `push:` trigger if you switch to public + GitHub Pages.
   workflow_dispatch:
 
 permissions:
