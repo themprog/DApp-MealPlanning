@@ -112,8 +112,11 @@
   .pricegrid{display:grid; grid-template-columns:repeat(auto-fill,minmax(84px,1fr)); gap:8px; margin-top:8px;}
   .pricecell{background:var(--surface2); border:1px solid var(--border); border-radius:9px; padding:7px 8px;}
   .pricecell.cheap{border-color:var(--safe); background:var(--safe-bg);}
-  .pricecell .ps{font-size:10.5px; color:var(--muted); font-weight:700; text-transform:uppercase; letter-spacing:.3px; margin-bottom:3px;}
+  .pricecell .pshead{display:flex; align-items:center; justify-content:space-between; margin-bottom:3px; gap:4px;}
+  .pricecell .ps{font-size:10.5px; color:var(--muted); font-weight:700; text-transform:uppercase; letter-spacing:.3px;}
   .pricecell input{padding:6px 7px; font-size:14px;}
+  .pf-search{background:none; border:none; color:var(--accent); font-size:12px; cursor:pointer; padding:0; line-height:1; flex:none;}
+  .pf-search:active{opacity:.6;}
   .linkopt{display:flex; align-items:center; gap:10px; padding:10px 8px; border-bottom:1px solid var(--border); cursor:pointer;}
   .linkopt:last-child{border-bottom:none;}
   .linkopt.sel{background:var(--accent-bg); border-radius:9px;}
@@ -184,6 +187,18 @@ const PROTEINS=["Chicken","Steak","Ground Meat","Pork","Seafood (his)","Meatless
 const MEALS=["Breakfast","Lunch","Dinner","Baking"];
 const BAKETYPES=["Spooky Treats","Cookies","Cakes & Cupcakes","Breads & Muffins","Pies & Tarts","Other"];
 const STORES=["Walmart","King Soopers","Safeway","Amazon","Target"];
+/* Opens each store's real search results in a new tab — no API, no key, no quota. These
+   sites all block being embedded in an in-app frame (X-Frame-Options/CSP), so a new tab
+   is the only reliable way to actually show their page; the user reads the price there
+   and types it into the form themselves. */
+const STORE_SEARCH_URL={
+  "Walmart": q=>`https://www.walmart.com/search?q=${encodeURIComponent(q)}`,
+  "Target": q=>`https://www.target.com/s?searchTerm=${encodeURIComponent(q)}`,
+  "Amazon": q=>`https://www.amazon.com/s?k=${encodeURIComponent(q)}`,
+  "Safeway": q=>`https://www.safeway.com/shop/search-results.html?q=${encodeURIComponent(q)}`,
+  "King Soopers": q=>`https://www.kingsoopers.com/search?query=${encodeURIComponent(q)}`,
+};
+function couponSearchUrl(q){ return `https://www.google.com/search?q=${encodeURIComponent(q+" coupon")}`; }
 const DAYS=["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
 const TAGS=[{id:"adapt",label:"Adapt me",type:"warn"}];
 const TAGMAP=Object.fromEntries(TAGS.map(t=>[t.id,t]));
@@ -458,13 +473,24 @@ function openProductForm(existing,prefill,onSaved){
       <input id="pBrand" placeholder="Brand (optional)" value="${esc(p.brand||"")}" />
       <input id="pSize" placeholder="Size (optional)" value="${esc(p.size||"")}" />
     </div>
-    <div class="fld"><span class="lb">Prices per store</span><div class="pricegrid">${STORES.map(s=>`<div class="pricecell"><div class="ps">${esc(s)}</div><input class="pf-price" data-store="${esc(s)}" inputmode="decimal" placeholder="—" value="${p.prices&&p.prices[s]!=null?p.prices[s]:''}"></div>`).join("")}</div></div>
+    <div class="fld"><span class="lb">Prices per store</span>
+      <div class="muted" style="font-size:12px; margin:-2px 0 8px;">Tap 🔎 to search a store's real site for this product — opens in a new tab, no account or API key needed. Read the price there, then type it in below.</div>
+      <div class="pricegrid">${STORES.map(s=>`<div class="pricecell"><div class="pshead"><span class="ps">${esc(s)}</span>${STORE_SEARCH_URL[s]?`<button type="button" class="pf-search" data-store="${esc(s)}" title="Search ${esc(s)}" aria-label="Search ${esc(s)} for this product">🔎</button>`:""}</div><input class="pf-price" data-store="${esc(s)}" inputmode="decimal" placeholder="—" value="${p.prices&&p.prices[s]!=null?p.prices[s]:''}"></div>`).join("")}</div></div>
     <label class="fld"><span class="lb">Deal / coupon notes (optional)</span><textarea id="pDealNotes" placeholder="e.g. Target: clip $1 digital coupon; Amazon: was $5.12, on sale for $4.67">${esc(p.dealNotes||"")}</textarea></label>
+    <button type="button" class="ghost" id="pCouponSearch" style="width:100%; margin:-6px 0 14px;">🏷 Search for coupons</button>
     <div class="sheetactions"><button class="ghost" id="pCancel" style="flex:none;">Cancel</button>${existing?'<button class="ghost" id="pDelete" style="flex:none; color:var(--danger);">Delete</button>':''}<button class="btn" id="pSave">Save product</button></div>`;
   document.body.appendChild(overlay);
   const close=()=>overlay.remove();
   overlay.addEventListener("click",e=>{ if(e.target===overlay) close(); });
   sheet.querySelector("#pCancel").onclick=close;
+  sheet.querySelectorAll(".pf-search").forEach(btn=>btn.onclick=()=>{
+    const q=sheet.querySelector("#pName").value.trim(); if(!q){ toast("Type a product name first"); sheet.querySelector("#pName").focus(); return; }
+    const build=STORE_SEARCH_URL[btn.dataset.store]; if(build) window.open(build(q),"_blank","noopener");
+  });
+  sheet.querySelector("#pCouponSearch").onclick=()=>{
+    const q=sheet.querySelector("#pName").value.trim(); if(!q){ toast("Type a product name first"); sheet.querySelector("#pName").focus(); return; }
+    window.open(couponSearchUrl(q),"_blank","noopener");
+  };
   if(existing) sheet.querySelector("#pDelete").onclick=()=>{ state.products=state.products.filter(x=>x.id!==existing.id); Object.keys(state.productLinks).forEach(k=>{ if(state.productLinks[k]===existing.id) delete state.productLinks[k]; }); close(); saveState(); render(); };
   sheet.querySelector("#pSave").onclick=()=>{
     const name=sheet.querySelector("#pName").value.trim(); if(!name){ sheet.querySelector("#pName").focus(); return; }
