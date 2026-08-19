@@ -348,6 +348,16 @@ async function saveApiKey(k){
   try{ if(window.storage) await window.storage.set(APIKEY_KEY,k); }catch(e){}
   try{ localStorage.setItem(APIKEY_KEY,k); }catch(e){}
 }
+const GEMINIKEY_KEY="mpGeminiKey";
+async function loadGeminiKey(){
+  try{ if(window.storage){ const r=await window.storage.get(GEMINIKEY_KEY); if(r&&r.value) return r.value; } }catch(e){}
+  try{ return localStorage.getItem(GEMINIKEY_KEY)||""; }catch(e){ return ""; }
+}
+async function saveGeminiKey(k){
+  geminiKey=k;
+  try{ if(window.storage) await window.storage.set(GEMINIKEY_KEY,k); }catch(e){}
+  try{ localStorage.setItem(GEMINIKEY_KEY,k); }catch(e){}
+}
 function id(){ return Math.random().toString(36).slice(2,10); }
 function seed(){
   return { theme:"crimson", bg:"wallpaper", font:"spooky", themedV2:true, fontSet:true, bgV3:true, appliances:["Crockpot","Instant Pot"],
@@ -359,7 +369,7 @@ function seed(){
     ],
     weekMeals:[], filters:[], checked:{}, manual:[], products:[], productLinks:{}, tab:"recipes" };
 }
-let state; let surprisePick=null; let searchQuery=""; let favSearchQuery=""; let productSearchQuery=""; let apiKey="";
+let state; let surprisePick=null; let searchQuery=""; let favSearchQuery=""; let productSearchQuery=""; let apiKey=""; let geminiKey="";
 function withFocusPreserved(renderFn){ const active=document.activeElement; const aid=active&&active.id; const start=active&&active.selectionStart; const end=active&&active.selectionEnd; renderFn(); if(aid){ const el=document.getElementById(aid); if(el){ el.focus(); if(start!=null&&el.setSelectionRange){ try{ el.setSelectionRange(start,end); }catch(e){} } } } }
 
 /* helpers */
@@ -370,7 +380,7 @@ function chipsFor(r){ const parts=[...r.tags.map(t=>TAGMAP[t]?`<span class="tag 
 
 /* photos — stored one key per recipe so the main save stays small */
 const photos={};
-function compressImage(file){ return new Promise((resolve,reject)=>{ const img=new Image(); const url=URL.createObjectURL(file); img.onload=()=>{ let w=img.width,h=img.height,M=760; if(w>h&&w>M){ h=Math.round(h*M/w); w=M; } else if(h>=w&&h>M){ w=Math.round(w*M/h); h=M; } const c=document.createElement("canvas"); c.width=w; c.height=h; c.getContext("2d").drawImage(img,0,0,w,h); URL.revokeObjectURL(url); try{ resolve(c.toDataURL("image/jpeg",0.72)); }catch(e){ reject(e); } }; img.onerror=()=>{ URL.revokeObjectURL(url); reject(new Error("bad image")); }; img.src=url; }); }
+function compressImage(file,maxDim,quality){ maxDim=maxDim||760; quality=quality==null?0.72:quality; return new Promise((resolve,reject)=>{ const img=new Image(); const url=URL.createObjectURL(file); img.onload=()=>{ let w=img.width,h=img.height,M=maxDim; if(w>h&&w>M){ h=Math.round(h*M/w); w=M; } else if(h>=w&&h>M){ w=Math.round(w*M/h); h=M; } const c=document.createElement("canvas"); c.width=w; c.height=h; c.getContext("2d").drawImage(img,0,0,w,h); URL.revokeObjectURL(url); try{ resolve(c.toDataURL("image/jpeg",quality)); }catch(e){ reject(e); } }; img.onerror=()=>{ URL.revokeObjectURL(url); reject(new Error("bad image")); }; img.src=url; }); }
 async function loadPhoto(pid){
   try{ if(window.storage){ const r=await window.storage.get("mpimg:"+pid); if(r&&r.value){ photos[pid]=r.value; return; } } }catch(e){}
   try{ const v=localStorage.getItem("mpimg:"+pid); if(v) photos[pid]=v; }catch(e){}
@@ -412,6 +422,7 @@ function renderRecipes(){
     <div class="filterbar">${adaptChip}</div>
     <button class="btn" style="width:100%; margin:6px 0;" data-act="add">＋ Add a ${mv.toLowerCase()} recipe</button>
     <button class="ghost" style="width:100%; margin:0 0 6px;" data-act="importlink">🔗 Import from a link</button>
+    <button class="ghost" style="width:100%; margin:0 0 6px;" data-act="importphoto">📸 Import from a photo</button>
     ${body}
     <p class="fab-note">Sections up top switch between Breakfast, Lunch, Dinner &amp; Baking. Tap ☆ to save a keeper · “＋ This week” to plan it.</p>`;
 }
@@ -657,6 +668,12 @@ function openSettings(){
       <input type="password" id="sApiKey" placeholder="RapidAPI key" value="${esc(apiKey)}" style="flex:1;">
       <button type="button" class="ghost" id="sApiKeySave">Save</button>
     </div>
+    <div class="lb">Recipe photo scanning</div>
+    <div class="muted" style="font-size:12.5px; margin:-2px 0 10px;">Paste a free Gemini API key (from Google AI Studio) to import recipes from a photo or screenshot. Stored only on this device — never included in backups, and never written into the app's source file.</div>
+    <div class="row" style="gap:8px; margin-bottom:16px;">
+      <input type="password" id="sGeminiKey" placeholder="Gemini API key" value="${esc(geminiKey)}" style="flex:1;">
+      <button type="button" class="ghost" id="sGeminiKeySave">Save</button>
+    </div>
     <div class="lb">Your data</div>
     <div class="muted" style="font-size:12.5px; margin:-2px 0 10px;">Everything lives only on this device. Save a backup now and then so you never lose your recipes.</div>
     <div class="row" style="gap:8px;">
@@ -671,6 +688,7 @@ function openSettings(){
   sheet.querySelector("#sDone").onclick=close;
   sheet.querySelectorAll(".opt").forEach(o=>o.onclick=()=>{ const kind=o.dataset.kind, idv=o.dataset.id; if(kind==="theme") applyTheme(idv); else if(kind==="bg") applyBg(idv); else applyFont(idv); sheet.querySelectorAll(`.opt[data-kind='${kind}']`).forEach(x=>x.classList.toggle("sel", x===o)); saveState(); });
   sheet.querySelector("#sApiKeySave").onclick=async()=>{ const v=sheet.querySelector("#sApiKey").value.trim(); await saveApiKey(v); toast(v?"Key saved":"Key cleared"); };
+  sheet.querySelector("#sGeminiKeySave").onclick=async()=>{ const v=sheet.querySelector("#sGeminiKey").value.trim(); await saveGeminiKey(v); toast(v?"Key saved":"Key cleared"); };
   sheet.querySelector("#sExport").onclick=exportBackup;
   const importInput=sheet.querySelector("#sImportInput");
   sheet.querySelector("#sImport").onclick=()=>importInput.click();
@@ -855,6 +873,78 @@ function openRecipeImport(){
   useBtn.onclick=()=>{ if(!lastDraft) return; close(); openForm(null,lastDraft); };
 }
 
+/* recipe import from a photo — Gemini vision, client-side only, key never leaves this device */
+async function scanRecipePhoto(dataUri){
+  if(!geminiKey) throw new Error("No Gemini API key saved — add one in Settings.");
+  const comma=dataUri.indexOf(","); const base64=comma>=0?dataUri.slice(comma+1):dataUri;
+  const schema={type:"OBJECT",properties:{name:{type:"STRING"},ingredients:{type:"ARRAY",items:{type:"STRING"}},instructions:{type:"ARRAY",items:{type:"STRING"}}},required:["name","ingredients","instructions"]};
+  const body={
+    contents:[{parts:[
+      {text:"Extract the cooking recipe shown in this image (it may be a photo of a recipe card, a cookbook page, a screenshot, or a snippet of a webpage). Read all visible text carefully. Return the recipe title, the complete ingredient list (each ingredient as its own string, including its quantity), and the step-by-step instructions (each step as its own string, in order). If part of the recipe isn't visible or legible, leave that part empty rather than guessing. Ignore unrelated page content like ads, navigation, or comments."},
+      {inlineData:{mimeType:"image/jpeg",data:base64}}
+    ]}],
+    generationConfig:{responseMimeType:"application/json",responseSchema:schema}
+  };
+  const ctrl=new AbortController(); const t=setTimeout(()=>ctrl.abort(),30000);
+  let res;
+  try{
+    res=await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",{
+      method:"POST", headers:{"Content-Type":"application/json","x-goog-api-key":geminiKey}, body:JSON.stringify(body), signal:ctrl.signal
+    });
+  } finally { clearTimeout(t); }
+  if(!res.ok){ let msg="HTTP "+res.status; try{ const j=await res.json(); if(j&&j.error&&j.error.message) msg=j.error.message; }catch(e){} throw new Error(msg); }
+  const json=await res.json();
+  const text=json&&json.candidates&&json.candidates[0]&&json.candidates[0].content&&json.candidates[0].content.parts&&json.candidates[0].content.parts[0]&&json.candidates[0].content.parts[0].text;
+  if(!text) throw new Error("The model didn't return a recipe");
+  let parsed; try{ parsed=JSON.parse(text); }catch(e){ throw new Error("Couldn't understand the model's response"); }
+  return parsed;
+}
+function openRecipePhotoImport(){
+  const overlay=document.createElement("div"); overlay.className="overlay"; const sheet=document.createElement("div"); sheet.className="sheet"; overlay.appendChild(sheet);
+  sheet.innerHTML=`<h3 class="serif">Import from a photo</h3>
+    <div class="muted" style="font-size:13px; margin:-8px 0 12px;">Take a screenshot or snap a photo of a recipe card, cookbook page, or website — we'll read the title, ingredients and steps, and use the same photo as the recipe's cover photo. Needs a free Gemini API key (set it in Settings).</div>
+    ${geminiKey?"":`<div class="muted" style="font-size:13px; margin-bottom:10px; color:var(--warn);">No Gemini API key saved yet — add one in Settings first.</div>`}
+    <button type="button" class="ghost" id="riPhotoBtn" style="width:100%; margin-bottom:12px;">📷 Choose a photo</button>
+    <input type="file" accept="image/*" id="riPhotoInput" style="display:none;">
+    <img id="riPhotoPrev" alt="" style="width:100%;height:160px;object-fit:cover;border-radius:10px;display:none;margin-bottom:10px;">
+    <div id="riResult"></div>
+    <div class="sheetactions"><button class="ghost" id="riCancel" style="flex:1;">Cancel</button><button class="btn" id="riUse" style="flex:1;" disabled>Use this</button></div>`;
+  document.body.appendChild(overlay);
+  const close=()=>overlay.remove();
+  overlay.addEventListener("click",e=>{ if(e.target===overlay) close(); });
+  sheet.querySelector("#riCancel").onclick=close;
+  const resultEl=sheet.querySelector("#riResult");
+  const useBtn=sheet.querySelector("#riUse");
+  const fi=sheet.querySelector("#riPhotoInput");
+  const prev=sheet.querySelector("#riPhotoPrev");
+  let lastDraft=null;
+  sheet.querySelector("#riPhotoBtn").onclick=()=>fi.click();
+  fi.onchange=async()=>{
+    const f=fi.files&&fi.files[0]; if(!f) return;
+    useBtn.disabled=true; lastDraft=null;
+    resultEl.innerHTML=`<div class="muted" style="padding:12px 2px;">Reading the photo… this can take a few seconds.</div>`;
+    try{
+      const [visionPhoto,storedPhoto]=await Promise.all([compressImage(f,1600,0.85),compressImage(f,760,0.72)]);
+      prev.src=storedPhoto; prev.style.display="block";
+      const parsed=await scanRecipePhoto(visionPhoto);
+      const ingredients=(Array.isArray(parsed.ingredients)?parsed.ingredients:[]).map(line=>{ const s=splitQtyName(line); return {name:s.name,qty:s.qty,store:STORES[0],brand:""}; });
+      const steps=(Array.isArray(parsed.instructions)?parsed.instructions:[]).map(s=>String(s||"").trim()).filter(Boolean);
+      const instructions=steps.map((s,i)=>`${i+1}. ${s}`).join("\n");
+      const draft={name:(parsed.name||"").trim(),ingredients,instructions,embeddedPhoto:storedPhoto};
+      if(!draft.name && !draft.ingredients.length){
+        resultEl.innerHTML=`<div class="muted" style="padding:12px 2px; color:var(--warn);">Couldn't make out a recipe in that photo. Try a clearer or closer shot, or add it by hand.</div>`;
+        return;
+      }
+      lastDraft=draft;
+      resultEl.innerHTML=`<div class="card"><div class="name" style="font-weight:700; margin-bottom:4px;">${esc(draft.name||"(no title found)")}</div><div class="muted" style="font-size:13px;">${draft.ingredients.length} ingredient${draft.ingredients.length===1?"":"s"} · ${steps.length} step${steps.length===1?"":"s"} found</div></div>`;
+      useBtn.disabled=false;
+    }catch(e){
+      resultEl.innerHTML=`<div class="muted" style="padding:12px 2px; color:var(--danger);">Couldn't read that photo (${esc(e.message||"error")}). Try again, or add the recipe by hand.</div>`;
+    }
+  };
+  useBtn.onclick=()=>{ if(!lastDraft) return; close(); openForm(null,lastDraft); };
+}
+
 /* recipe form */
 function openForm(existing,prefill){
   const r=existing||{name:"",protein:"Chicken",meal:(state.mealView||"Dinner"),bakeType:"Cookies",tags:[],appliances:[],ingredients:[{name:"",qty:"",store:STORES[0],brand:""}],pinterest:"",notes:"",instructions:"",photoUrl:"",...(prefill||{})};
@@ -882,7 +972,7 @@ function openForm(existing,prefill){
   sheet.querySelector("#addIng").onclick=()=>ingWrap.appendChild(ingRow({name:"",qty:"",store:STORES[0],brand:""}));
   sheet.querySelectorAll("#fTags .chip").forEach(c=>c.onclick=()=>c.classList.toggle("on"));
   sheet.querySelectorAll("#fTools .chip").forEach(c=>c.onclick=()=>c.classList.toggle("on"));
-  let pendingPhoto=(existing&&photos[existing.id])?photos[existing.id]:null; let photoDirty=false;
+  let pendingPhoto=(existing&&photos[existing.id])?photos[existing.id]:((prefill&&prefill.embeddedPhoto)||null); let photoDirty=!!(prefill&&prefill.embeddedPhoto);
   const _prev=sheet.querySelector("#fPhotoPrev"), _del=sheet.querySelector("#fPhotoDel"), _fi=sheet.querySelector("#fPhotoInput");
   function refreshPhoto(){
     if(pendingPhoto){ _prev.src=pendingPhoto; _prev.style.display="block"; _del.style.display="inline-flex"; }
@@ -916,6 +1006,7 @@ document.getElementById("nav").addEventListener("click", e=>{ const b=e.target.c
 main.addEventListener("click", e=>{ const t=e.target.closest("[data-act]"); if(!t) return; const act=t.dataset.act;
   if(act==="add") return openForm(null);
   if(act==="importlink") return openRecipeImport();
+  if(act==="importphoto") return openRecipePhotoImport();
   if(act==="edit") return openForm(recipeById(t.dataset.id));
   if(act==="fav"){ const r=recipeById(t.dataset.id); if(!r) return; r.favorite=!r.favorite; saveState(); if(state.tab==="favorites") renderFavorites(); else { t.classList.toggle("on", r.favorite); t.textContent=r.favorite?"★":"☆"; } return; }
   if(act==="filter"){ const f=t.dataset.id; state.filters=state.filters.includes(f)?state.filters.filter(x=>x!==f):[...state.filters,f]; saveState(); return renderRecipes(); }
@@ -983,6 +1074,7 @@ main.addEventListener("input", e=>{
   if(!state.mealView) state.mealView="Dinner";
   await Promise.all(state.recipes.filter(r=>r.photo).map(r=>loadPhoto(r.id)));
   apiKey=await loadApiKey();
+  geminiKey=await loadGeminiKey();
   applyTheme(state.theme); applyFont(state.font); applyBg(state.bg);
   render();
 })();
