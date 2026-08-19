@@ -1,4 +1,4 @@
-const CACHE = "midnight-pantry-v1";
+const CACHE = "midnight-pantry-v2";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -23,8 +23,9 @@ self.addEventListener("activate", e => {
   );
 });
 
-// Stale-while-revalidate for same-origin GETs only — recipe/product/RapidAPI
-// lookups go straight to the network so they're never served stale or cached.
+// Network-first for same-origin GETs — always serve the latest deploy when
+// online (this app changes often), falling back to cache only when offline.
+// Cross-origin (RapidAPI etc.) requests are left alone entirely.
 self.addEventListener("fetch", e => {
   const req = e.request;
   if (req.method !== "GET") return;
@@ -32,15 +33,12 @@ self.addEventListener("fetch", e => {
   if (url.origin !== self.location.origin) return;
 
   e.respondWith(
-    caches.match(req).then(cached => {
-      const network = fetch(req).then(res => {
-        if (res && res.ok) {
-          const copy = res.clone();
-          caches.open(CACHE).then(c => c.put(req, copy));
-        }
-        return res;
-      }).catch(() => cached);
-      return cached || network;
-    })
+    fetch(req).then(res => {
+      if (res && res.ok) {
+        const copy = res.clone();
+        caches.open(CACHE).then(c => c.put(req, copy));
+      }
+      return res;
+    }).catch(() => caches.match(req))
   );
 });
