@@ -411,6 +411,7 @@ function renderRecipes(){
     <input type="search" id="recipeSearch" placeholder="Search recipes or ingredients…" value="${esc(searchQuery)}" style="margin-bottom:10px;">
     <div class="filterbar">${adaptChip}</div>
     <button class="btn" style="width:100%; margin:6px 0;" data-act="add">＋ Add a ${mv.toLowerCase()} recipe</button>
+    <button class="ghost" style="width:100%; margin:0 0 6px;" data-act="importlink">🔗 Import from a link</button>
     ${body}
     <p class="fab-note">Sections up top switch between Breakfast, Lunch, Dinner &amp; Baking. Tap ☆ to save a keeper · “＋ This week” to plan it.</p>`;
 }
@@ -714,9 +715,149 @@ async function importBackupFile(file){
   toast("Backup restored");
 }
 
+/* recipe import — paste a Pinterest pin link or any recipe page link, no key needed */
+const READER_BASE="https://r.jina.ai/";
+async function fetchPageHtml(url){
+  const ctrl=new AbortController(); const t=setTimeout(()=>ctrl.abort(),20000);
+  try{
+    const res=await fetch(READER_BASE+url,{headers:{"X-Return-Format":"html"},signal:ctrl.signal});
+    if(!res.ok) throw new Error("HTTP "+res.status);
+    return await res.text();
+  } finally { clearTimeout(t); }
+}
+function extractMeta(html,prop){
+  let m=html.match(new RegExp(`<meta[^>]*property=["']${prop}["'][^>]*content=["']([^"']*)["']`,"i"));
+  if(m) return m[1];
+  m=html.match(new RegExp(`<meta[^>]*content=["']([^"']*)["'][^>]*property=["']${prop}["']`,"i"));
+  return m?m[1]:null;
+}
+function extractRecipeJsonLd(html){
+  const blocks=[...html.matchAll(/<script[^>]*application\/ld\+json[^>]*>([\s\S]*?)<\/script>/gi)];
+  for(const m of blocks){
+    let data; try{ data=JSON.parse(m[1]); }catch(e){ continue; }
+    const items=Array.isArray(data)?data:(data["@graph"]?data["@graph"]:[data]);
+    for(const it of items){
+      const t=it&&it["@type"];
+      if(t==="Recipe"||(Array.isArray(t)&&t.includes("Recipe"))) return it;
+    }
+  }
+  return null;
+}
+const ING_UNITS=["cup","cups","tsp","teaspoon","teaspoons","tbsp","tablespoon","tablespoons","oz","ounce","ounces","lb","lbs","pound","pounds","g","gram","grams","kg","ml","l","liter","liters","clove","cloves","can","cans","package","packages","pkg","pinch","pinches","dash","stick","sticks","slice","slices","head","heads","bunch","bunches","quart","quarts","pint","pints","gallon","gallons","container"];
+function splitQtyName(line){
+  const fracMap={"¼":" 1/4","½":" 1/2","¾":" 3/4","⅓":" 1/3","⅔":" 2/3","⅛":" 1/8","⅜":" 3/8","⅝":" 5/8","⅞":" 7/8"};
+  let s=(line||"").trim().replace(/[¼½¾⅓⅔⅛⅜⅝⅞]/g,m=>fracMap[m]).trim();
+  const m=s.match(/^((?:\d+\s+\d+\/\d+)|(?:\d+\/\d+)|(?:\d+(?:\.\d+)?))(\s*(?:-|–|to)\s*(?:\d+\s+\d+\/\d+|\d+\/\d+|\d+(?:\.\d+)?))?\s*/);
+  if(!m||!m[1]) return {qty:"",name:s};
+  let qty=(m[1]+(m[2]||"")).trim();
+  let rest=s.slice(m[0].length).trim();
+  const um=rest.match(/^([a-zA-Z]+\.?)\s+(.*)$/);
+  if(um&&ING_UNITS.includes(um[1].toLowerCase().replace(/\.$/,""))){ qty+=" "+um[1]; rest=um[2]; }
+  return {qty,name:rest||s};
+}
+function stepsFromInstructions(instr){
+  const steps=[];
+  function walk(x){
+    if(!x) return;
+    if(typeof x==="string"){ x.split(/\n+/).map(s=>s.trim()).filter(Boolean).forEach(s=>steps.push(s)); return; }
+    if(Array.isArray(x)){ x.forEach(walk); return; }
+    if(typeof x==="object"){
+      if(Array.isArray(x.itemListElement)){ walk(x.itemListElement); return; }
+      if(x.text) steps.push(String(x.text).trim());
+      else if(x.name) steps.push(String(x.name).trim());
+    }
+  }
+  walk(instr);
+  return steps.filter(Boolean);
+}
+function imageFromJsonLd(image){
+  if(!image) return "";
+  if(typeof image==="string") return image;
+  if(Array.isArray(image)) return imageFromJsonLd(image[0]);
+  if(typeof image==="object") return image.url||"";
+  return "";
+}
+function normalizeRecipeRecord(rec){
+  const name=(rec.name||"").trim();
+  const ingredients=(Array.isArray(rec.recipeIngredient)?rec.recipeIngredient:[]).map(line=>{ const s=splitQtyName(line); return {name:s.name,qty:s.qty,store:STORES[0],brand:""}; });
+  const steps=stepsFromInstructions(rec.recipeInstructions);
+  const instructions=steps.map((s,i)=>`${i+1}. ${s}`).join("\n");
+  const photoUrl=imageFromJsonLd(rec.image);
+  return {name,ingredients,instructions,photoUrl};
+}
+async function importRecipeFromUrl(rawUrl){
+  let url=(rawUrl||"").trim();
+  if(!url) throw new Error("Paste a link first");
+  if(!/^https?:\/\//i.test(url)) url="https://"+url;
+  const isPinterest=/(^|\.)pinterest\.[a-z.]+\/pin\//i.test(url);
+  const html=await fetchPageHtml(url);
+  let rec=extractRecipeJsonLd(html);
+  if(isPinterest){
+    const seeAlso=extractMeta(html,"og:see_also");
+    if(seeAlso){
+      try{
+        const html2=await fetchPageHtml(seeAlso);
+        const rec2=extractRecipeJsonLd(html2);
+        if(rec2&&Array.isArray(rec2.recipeInstructions)&&rec2.recipeInstructions.length) rec=rec2;
+        else if(rec2&&!rec) rec=rec2;
+      }catch(e){ /* keep whatever pinterest gave us */ }
+    }
+  }
+  if(rec){
+    const norm=normalizeRecipeRecord(rec);
+    if(!norm.photoUrl){ const og=extractMeta(html,"og:image"); if(og) norm.photoUrl=og; }
+    return {...norm, pinterest:url, partial:false};
+  }
+  const ogTitle=extractMeta(html,"og:title")||"";
+  const ogImage=extractMeta(html,"og:image")||"";
+  return {name:ogTitle.split(/\s[|\-–]\s/)[0].trim(),ingredients:[],instructions:"",photoUrl:ogImage,pinterest:url,partial:true};
+}
+function openRecipeImport(){
+  const overlay=document.createElement("div"); overlay.className="overlay"; const sheet=document.createElement("div"); sheet.className="sheet"; overlay.appendChild(sheet);
+  sheet.innerHTML=`<h3 class="serif">Import a recipe</h3>
+    <div class="muted" style="font-size:13px; margin:-8px 0 12px;">Paste a Pinterest pin link or a link to any recipe page. We'll pull in the title, ingredients, steps and photo for you to review before saving. No account or API key needed.</div>
+    <div class="row" style="gap:8px; margin-bottom:12px;"><input id="riUrl" placeholder="https://…" inputmode="url" style="flex:1;" /><button class="ghost" id="riGo" style="min-height:44px;">Fetch</button></div>
+    <div id="riResult"></div>
+    <div class="sheetactions"><button class="ghost" id="riCancel" style="flex:1;">Cancel</button><button class="btn" id="riUse" style="flex:1;" disabled>Use this</button></div>`;
+  document.body.appendChild(overlay);
+  const close=()=>overlay.remove();
+  overlay.addEventListener("click",e=>{ if(e.target===overlay) close(); });
+  sheet.querySelector("#riCancel").onclick=close;
+  const resultEl=sheet.querySelector("#riResult");
+  const useBtn=sheet.querySelector("#riUse");
+  let lastDraft=null;
+  async function go(){
+    const url=sheet.querySelector("#riUrl").value.trim();
+    if(!url){ toast("Paste a link first"); return; }
+    useBtn.disabled=true; lastDraft=null;
+    resultEl.innerHTML=`<div class="muted" style="padding:12px 2px;">Fetching… this can take a few seconds.</div>`;
+    try{
+      const draft=await importRecipeFromUrl(url);
+      if(!draft.name && !draft.ingredients.length){
+        resultEl.innerHTML=`<div class="muted" style="padding:12px 2px; color:var(--warn);">Couldn't find a recipe on that page. You can still add it by hand.</div>`;
+        return;
+      }
+      lastDraft=draft;
+      const stepCount=draft.instructions?draft.instructions.split("\n").filter(Boolean).length:0;
+      resultEl.innerHTML=`<div class="card">
+        ${draft.photoUrl?`<img src="${esc(draft.photoUrl)}" alt="" onerror="this.style.display='none'" style="width:100%;height:150px;object-fit:cover;border-radius:10px;margin-bottom:10px;">`:""}
+        <div class="name" style="font-weight:700; margin-bottom:4px;">${esc(draft.name||"(no title found)")}</div>
+        <div class="muted" style="font-size:13px;">${draft.ingredients.length} ingredient${draft.ingredients.length===1?"":"s"} · ${stepCount} step${stepCount===1?"":"s"} found</div>
+        ${draft.partial?`<div class="muted" style="font-size:12px; margin-top:6px; color:var(--warn);">Only partial info found on this page — you may need to fill in some of the rest by hand.</div>`:""}
+      </div>`;
+      useBtn.disabled=false;
+    }catch(e){
+      resultEl.innerHTML=`<div class="muted" style="padding:12px 2px; color:var(--danger);">Couldn't fetch that page (${esc(e.message||"error")}). Try again, or add the recipe by hand.</div>`;
+    }
+  }
+  sheet.querySelector("#riGo").onclick=go;
+  sheet.querySelector("#riUrl").addEventListener("keydown",e=>{ if(e.key==="Enter"){ e.preventDefault(); go(); } });
+  useBtn.onclick=()=>{ if(!lastDraft) return; close(); openForm(null,lastDraft); };
+}
+
 /* recipe form */
-function openForm(existing){
-  const r=existing||{name:"",protein:"Chicken",meal:(state.mealView||"Dinner"),bakeType:"Cookies",tags:[],appliances:[],ingredients:[{name:"",qty:"",store:STORES[0],brand:""}],pinterest:"",notes:""};
+function openForm(existing,prefill){
+  const r=existing||{name:"",protein:"Chicken",meal:(state.mealView||"Dinner"),bakeType:"Cookies",tags:[],appliances:[],ingredients:[{name:"",qty:"",store:STORES[0],brand:""}],pinterest:"",notes:"",instructions:"",photoUrl:"",...(prefill||{})};
   const overlay=document.createElement("div"); overlay.className="overlay"; const sheet=document.createElement("div"); sheet.className="sheet"; overlay.appendChild(sheet);
   sheet.innerHTML=`<h3 class="serif">${existing?"Edit recipe":"New recipe"}</h3>
     <label class="fld"><span class="lb">Recipe name</span><input id="fName" value="${esc(r.name)}" placeholder="What's it called?" /></label>
@@ -730,6 +871,7 @@ function openForm(existing){
     <div class="fld"><span class="lb">Needs swaps?</span><div class="tagpick" id="fTags">${TAGS.map(t=>`<button type="button" class="chip ${t.type} ${r.tags.includes(t.id)?'on':''}" data-tag="${t.id}">${esc(t.label)}</button>`).join("")}</div></div>
     <div class="fld"><span class="lb">Kitchen toys (optional)</span>${state.appliances.length?`<div class="tagpick" id="fTools">${state.appliances.map(a=>`<button type="button" class="chip tool ${(r.appliances||[]).includes(a)?'on':''}" data-tool="${esc(a)}">${esc(a)}</button>`).join("")}</div>`:`<div class="muted" style="font-size:13px;">Add your toys in the Kitchen tab to tag recipes here.</div>`}</div>
     <div class="fld"><span class="lb">Ingredients &amp; where to buy them</span><div id="fIngs"></div><button type="button" class="ghost tiny" id="addIng" style="margin-top:4px;">＋ Add ingredient</button></div>
+    <label class="fld"><span class="lb">Instructions (optional)</span><textarea id="fInstructions" placeholder="1. Preheat oven...&#10;2. Mix the dry ingredients...">${esc(r.instructions||"")}</textarea></label>
     <label class="fld"><span class="lb">Pinterest link (optional)</span><input id="fPin" value="${esc(r.pinterest||"")}" placeholder="https://pinterest.com/..." inputmode="url" /></label>
     <label class="fld"><span class="lb">Notes (optional)</span><textarea id="fNotes" placeholder="Cooking notes, texture/spice reminders...">${esc(r.notes||"")}</textarea></label>
     <div class="sheetactions"><button class="ghost" id="fCancel" style="flex:none;">Cancel</button>${existing?'<button class="ghost" id="fDelete" style="flex:none; color:var(--danger);">Delete</button>':''}<button class="btn" id="fSave">Save recipe</button></div>`;
@@ -742,7 +884,11 @@ function openForm(existing){
   sheet.querySelectorAll("#fTools .chip").forEach(c=>c.onclick=()=>c.classList.toggle("on"));
   let pendingPhoto=(existing&&photos[existing.id])?photos[existing.id]:null; let photoDirty=false;
   const _prev=sheet.querySelector("#fPhotoPrev"), _del=sheet.querySelector("#fPhotoDel"), _fi=sheet.querySelector("#fPhotoInput");
-  function refreshPhoto(){ if(pendingPhoto){ _prev.src=pendingPhoto; _prev.style.display="block"; _del.style.display="inline-flex"; } else { _prev.style.display="none"; _del.style.display="none"; } }
+  function refreshPhoto(){
+    if(pendingPhoto){ _prev.src=pendingPhoto; _prev.style.display="block"; _del.style.display="inline-flex"; }
+    else if(!photoDirty && r.photoUrl){ _prev.src=r.photoUrl; _prev.style.display="block"; _del.style.display="none"; }
+    else { _prev.style.display="none"; _del.style.display="none"; }
+  }
   refreshPhoto();
   sheet.querySelector("#fPhotoBtn").onclick=()=>_fi.click();
   _fi.onchange=async()=>{ const f=_fi.files&&_fi.files[0]; if(!f) return; try{ pendingPhoto=await compressImage(f); photoDirty=true; refreshPhoto(); }catch(e){ toast("Couldn't load that image"); } };
@@ -758,7 +904,7 @@ function openForm(existing){
     const ings=[...ingWrap.children].map(div=>({name:div.querySelector(".i-name").value.trim(),qty:div.querySelector(".i-qty").value.trim(),store:div.querySelector(".i-store").value,brand:div.querySelector(".i-brand").value.trim()})).filter(i=>i.name);
     const tags=[...sheet.querySelectorAll("#fTags .chip.on")].map(c=>c.dataset.tag); const appliances=[...sheet.querySelectorAll("#fTools .chip.on")].map(c=>c.dataset.tool);
     const mealVal=_meal.value; const bakeVal=sheet.querySelector("#fBakeType").value; const protVal=(mealVal==="Baking")?"Other":sheet.querySelector("#fProtein").value;
-    const rec={id:existing?existing.id:id(),name,meal:mealVal,protein:protVal,bakeType:bakeVal,tags,appliances,ingredients:ings,pinterest:sheet.querySelector("#fPin").value.trim(),notes:sheet.querySelector("#fNotes").value.trim(),favorite:existing?existing.favorite:false,photo:existing?(existing.photo||false):false,photoUrl:existing?(existing.photoUrl||""):""};
+    const rec={id:existing?existing.id:id(),name,meal:mealVal,protein:protVal,bakeType:bakeVal,tags,appliances,ingredients:ings,instructions:sheet.querySelector("#fInstructions").value.trim(),pinterest:sheet.querySelector("#fPin").value.trim(),notes:sheet.querySelector("#fNotes").value.trim(),favorite:existing?existing.favorite:false,photo:existing?(existing.photo||false):false,photoUrl:existing?(existing.photoUrl||""):(r.photoUrl||"")};
     if(photoDirty){ if(pendingPhoto){ rec.photo=true; savePhoto(rec.id,pendingPhoto); } else { rec.photo=false; removePhoto(rec.id); } }
     if(existing){ const i=state.recipes.findIndex(x=>x.id===existing.id); state.recipes[i]=rec; } else state.recipes.unshift(rec); close(); saveState(); render(); };
   setTimeout(()=>sheet.querySelector("#fName").focus(),50);
@@ -769,6 +915,7 @@ document.getElementById("settingsBtn").addEventListener("click", openSettings);
 document.getElementById("nav").addEventListener("click", e=>{ const b=e.target.closest("button[data-tab]"); if(!b) return; state.tab=b.dataset.tab; saveState(); render(); });
 main.addEventListener("click", e=>{ const t=e.target.closest("[data-act]"); if(!t) return; const act=t.dataset.act;
   if(act==="add") return openForm(null);
+  if(act==="importlink") return openRecipeImport();
   if(act==="edit") return openForm(recipeById(t.dataset.id));
   if(act==="fav"){ const r=recipeById(t.dataset.id); if(!r) return; r.favorite=!r.favorite; saveState(); if(state.tab==="favorites") renderFavorites(); else { t.classList.toggle("on", r.favorite); t.textContent=r.favorite?"★":"☆"; } return; }
   if(act==="filter"){ const f=t.dataset.id; state.filters=state.filters.includes(f)?state.filters.filter(x=>x!==f):[...state.filters,f]; saveState(); return renderRecipes(); }
