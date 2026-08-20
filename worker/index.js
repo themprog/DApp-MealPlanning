@@ -3,8 +3,14 @@
  *
  * Two jobs, one deploy:
  *   1. Site-wide login gate: everything except /api/recipes* requires a
- *      signed session cookie (set via POST /__login with SITE_PASSWORD),
- *      then transparently proxies through to the real GitHub Pages site.
+ *      signed session cookie (set via POST /__login with SITE_PASSWORD).
+ *      Once authed, the Worker reads the requested file straight out of
+ *      the (private) GitHub repo via raw.githubusercontent.com with the
+ *      same token used for writes, and serves it directly — there is no
+ *      separate public GitHub Pages copy to route around. The repo MUST
+ *      be private for this to actually gate anything; on a public repo,
+ *      raw.githubusercontent.com would serve the same files to anyone
+ *      without a token at all.
  *   2. Shared recipe library write API: POST/PUT/DELETE /api/recipes[...]
  *      checks an X-Site-Password header (same password) and commits
  *      changes to data/recipes.json in the repo via GitHub's Contents API.
@@ -13,16 +19,31 @@
  *   SITE_PASSWORD  - the one password for both login and recipe writes
  *   SESSION_SECRET - long random string, signs the login session cookie
  *   GITHUB_TOKEN   - fine-grained PAT, Contents: Read and write, scoped
- *                    to just this one repo
+ *                    to just this one (private) repo
  *   GITHUB_REPO    - "owner/repo", e.g. "themprog/DApp-MealPlanning"
- *   GITHUB_BRANCH  - branch to commit recipe changes to
+ *   GITHUB_BRANCH  - branch to read pages from / commit recipe changes to
  * Optional:
- *   ORIGIN         - the GitHub Pages URL to proxy (defaults below)
  *   RECIPES_PATH   - path to the recipes JSON in the repo (defaults below)
  */
 
-const DEFAULT_ORIGIN = "https://themprog.github.io/DApp-MealPlanning";
 const DEFAULT_RECIPES_PATH = "data/recipes.json";
+const MIME_TYPES = {
+  html: "text/html; charset=utf-8",
+  json: "application/json",
+  webmanifest: "application/manifest+json",
+  js: "application/javascript",
+  css: "text/css",
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  svg: "image/svg+xml",
+  ico: "image/x-icon",
+};
+function mimeFor(path) {
+  if (path === "manifest.json") return "application/manifest+json";
+  const ext = path.split(".").pop().toLowerCase();
+  return MIME_TYPES[ext] || "application/octet-stream";
+}
 
 export default {
   async fetch(request, env) {
@@ -41,7 +62,7 @@ export default {
   },
 };
 
-/* ---------- site-wide login gate + proxy ---------- */
+/* ---------- site-wide login gate + serving files straight from git ---------- */
 
 async function handleSiteGate(request, url, env) {
   const cookie = request.headers.get("Cookie") || "";
@@ -62,14 +83,42 @@ async function handleSiteGate(request, url, env) {
     return loginPage("Wrong password. Try again.");
   }
 
+  // the auth check always runs before anything else touches the cache or GitHub —
+  // nothing below this line is reachable without a valid session cookie.
   if (!(await isAuthed(cookie, env.SESSION_SECRET))) {
     return loginPage();
   }
 
-  const origin = env.ORIGIN || DEFAULT_ORIGIN;
-  const originUrl = origin + url.pathname + url.search;
-  const res = await fetch(new Request(originUrl, request));
-  return new Response(res.body, res);
+  let path = url.pathname.replace(/^\/+/, "");
+  if (path === "") path = "index.html";
+
+  // short-lived edge cache so a page with several assets (index.html, the
+  // recipe library, icons) doesn't re-hit GitHub for every single request —
+  // 30s is enough to dedupe a page load's own asset fetches without going
+  // stale in any way a person would notice.
+  const cache = caches.default;
+  const cacheKey = new Request(new URL("/" + path, url.origin).toString(), request);
+  const cached = await cache.match(cacheKey);
+  if (cached) return cached;
+
+  const res = await fetchRepoFile(env, path);
+  if (res.status === 404) return new Response("Not found", { status: 404 });
+  if (!res.ok) return new Response("Upstream error: HTTP " + res.status, { status: 502 });
+
+  const body = await res.arrayBuffer();
+  const response = new Response(body, {
+    status: 200,
+    headers: { "Content-Type": mimeFor(path), "Cache-Control": "public, max-age=30" },
+  });
+  await cache.put(cacheKey, response.clone());
+  return response;
+}
+
+async function fetchRepoFile(env, path) {
+  const rawUrl = `https://raw.githubusercontent.com/${env.GITHUB_REPO}/${env.GITHUB_BRANCH}/${path}`;
+  return fetch(rawUrl, {
+    headers: { Authorization: `Bearer ${env.GITHUB_TOKEN}`, "User-Agent": "midnight-pantry-worker" },
+  });
 }
 
 function loginPage(error) {

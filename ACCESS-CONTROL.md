@@ -2,6 +2,15 @@
 > one deployable script at [`worker/index.js`](worker/index.js) — that's
 > the actual source of truth now. The script below is kept for reference /
 > the "why," but if you're pasting something into Cloudflare, use the file.
+>
+> **Also since this was written:** the design below proxies to a *public*
+> GitHub Pages URL, which means that URL still works directly for anyone
+> who has it — a proxy in front of an otherwise-public site can't force
+> traffic through itself. `worker/index.js` fixes this properly: the repo
+> goes **private**, GitHub Pages is no longer used at all, and the Worker
+> reads files straight out of git (via `raw.githubusercontent.com` with
+> the same token used for recipe writes) after the login check passes.
+> There is no public copy left to route around.
 
 # Adding a real login gate
 
