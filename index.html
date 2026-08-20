@@ -290,6 +290,16 @@ async function saveGeminiKey(k){
   try{ if(window.storage) await window.storage.set(GEMINIKEY_KEY,k); }catch(e){}
   try{ localStorage.setItem(GEMINIKEY_KEY,k); }catch(e){}
 }
+const LIBRARYURL_KEY="mpLibraryApiUrl";
+async function loadLibraryApiUrl(){
+  try{ if(window.storage){ const r=await window.storage.get(LIBRARYURL_KEY); if(r&&r.value) return r.value; } }catch(e){}
+  try{ return localStorage.getItem(LIBRARYURL_KEY)||""; }catch(e){ return ""; }
+}
+async function saveLibraryApiUrl(u){
+  libraryApiUrl=u;
+  try{ if(window.storage) await window.storage.set(LIBRARYURL_KEY,u); }catch(e){}
+  try{ localStorage.setItem(LIBRARYURL_KEY,u); }catch(e){}
+}
 function id(){ return Math.random().toString(36).slice(2,10); }
 function seed(){
   return { theme:"crimson", bg:"wallpaper", font:"spooky", themedV2:true, fontSet:true, bgV3:true, appliances:["Crockpot","Instant Pot"],
@@ -301,7 +311,7 @@ function seed(){
     ],
     weekMeals:[], filters:[], checked:{}, manual:[], products:[], productLinks:{}, tab:"recipes" };
 }
-let state; let surprisePick=null; let searchQuery=""; let favSearchQuery=""; let productSearchQuery=""; let apiKey=""; let geminiKey="";
+let state; let surprisePick=null; let searchQuery=""; let favSearchQuery=""; let productSearchQuery=""; let apiKey=""; let geminiKey=""; let libraryApiUrl="";
 function withFocusPreserved(renderFn){ const active=document.activeElement; const aid=active&&active.id; const start=active&&active.selectionStart; const end=active&&active.selectionEnd; renderFn(); if(aid){ const el=document.getElementById(aid); if(el){ el.focus(); if(start!=null&&el.setSelectionRange){ try{ el.setSelectionRange(start,end); }catch(e){} } } } }
 
 /* helpers */
@@ -606,6 +616,12 @@ function openSettings(){
       <input type="password" id="sGeminiKey" placeholder="Gemini API key" value="${esc(geminiKey)}" style="flex:1;">
       <button type="button" class="ghost" id="sGeminiKeySave">Save</button>
     </div>
+    <div class="lb">Shared recipe library</div>
+    <div class="muted" style="font-size:12.5px; margin:-2px 0 10px;">Optional: point this at your deployed sync API (see SHARED-LIBRARY-API.md) to publish or remove recipes from the shared library that ships to everyone. Leave blank to keep everything local-only. Stored only on this device.</div>
+    <div class="row" style="gap:8px; margin-bottom:16px;">
+      <input type="url" id="sLibraryUrl" placeholder="https://your-worker.workers.dev" value="${esc(libraryApiUrl)}" style="flex:1;">
+      <button type="button" class="ghost" id="sLibraryUrlSave">Save</button>
+    </div>
     <div class="lb">Your data</div>
     <div class="muted" style="font-size:12.5px; margin:-2px 0 10px;">Everything lives only on this device. Save a backup now and then so you never lose your recipes.</div>
     <div class="row" style="gap:8px;">
@@ -621,6 +637,7 @@ function openSettings(){
   sheet.querySelectorAll(".opt").forEach(o=>o.onclick=()=>{ const kind=o.dataset.kind, idv=o.dataset.id; if(kind==="theme") applyTheme(idv); else if(kind==="bg") applyBg(idv); else applyFont(idv); sheet.querySelectorAll(`.opt[data-kind='${kind}']`).forEach(x=>x.classList.toggle("sel", x===o)); saveState(); });
   sheet.querySelector("#sApiKeySave").onclick=async()=>{ const v=sheet.querySelector("#sApiKey").value.trim(); await saveApiKey(v); toast(v?"Key saved":"Key cleared"); };
   sheet.querySelector("#sGeminiKeySave").onclick=async()=>{ const v=sheet.querySelector("#sGeminiKey").value.trim(); await saveGeminiKey(v); toast(v?"Key saved":"Key cleared"); };
+  sheet.querySelector("#sLibraryUrlSave").onclick=async()=>{ const v=sheet.querySelector("#sLibraryUrl").value.trim().replace(/\/$/,""); await saveLibraryApiUrl(v); toast(v?"Saved":"Cleared"); };
   sheet.querySelector("#sExport").onclick=exportBackup;
   const importInput=sheet.querySelector("#sImportInput");
   sheet.querySelector("#sImport").onclick=()=>importInput.click();
@@ -877,6 +894,70 @@ function openRecipePhotoImport(){
   useBtn.onclick=()=>{ if(!lastDraft) return; close(); openForm(null,lastDraft); };
 }
 
+/* shared library sync — publish/update/remove a recipe via the optional password-gated Worker API */
+function openPasswordPrompt(title,desc){
+  return new Promise(resolve=>{
+    const overlay=document.createElement("div"); overlay.className="overlay"; const sheet=document.createElement("div"); sheet.className="sheet"; overlay.appendChild(sheet);
+    sheet.innerHTML=`<h3 class="serif">${esc(title)}</h3>
+      <div class="muted" style="font-size:13px; margin:-8px 0 12px;">${esc(desc)}</div>
+      <label class="fld"><span class="lb">Password</span><input type="password" id="lpPw" /></label>
+      <div class="sheetactions"><button class="ghost" id="lpCancel" style="flex:1;">Cancel</button><button class="btn" id="lpGo" style="flex:1;">Continue</button></div>`;
+    document.body.appendChild(overlay);
+    let done=false;
+    const finish=v=>{ if(done) return; done=true; overlay.remove(); resolve(v); };
+    overlay.addEventListener("click",e=>{ if(e.target===overlay) finish(null); });
+    sheet.querySelector("#lpCancel").onclick=()=>finish(null);
+    sheet.querySelector("#lpGo").onclick=()=>finish(sheet.querySelector("#lpPw").value);
+    const pw=sheet.querySelector("#lpPw");
+    pw.addEventListener("keydown",e=>{ if(e.key==="Enter"){ e.preventDefault(); finish(pw.value); } });
+    setTimeout(()=>pw.focus(),50);
+  });
+}
+async function libraryRequest(method,path,password,body){
+  const ctrl=new AbortController(); const t=setTimeout(()=>ctrl.abort(),20000);
+  try{
+    const res=await fetch(libraryApiUrl+path,{
+      method, signal:ctrl.signal,
+      headers:{"Content-Type":"application/json","X-Site-Password":password},
+      body:body?JSON.stringify(body):undefined,
+    });
+    let data=null; try{ data=await res.json(); }catch(e){}
+    if(!res.ok) throw new Error((data&&data.error)||("HTTP "+res.status));
+    return data;
+  } finally { clearTimeout(t); }
+}
+async function publishToLibrary(rec){
+  if(!libraryApiUrl){ toast("Set up the shared library API URL in Settings first"); return; }
+  const pw=await openPasswordPrompt(rec.importId?"Update shared library":"Publish to shared library","This commits the change to git via your Worker API.");
+  if(pw==null) return;
+  try{
+    const {ingredients,tags,appliances,name,protein,meal,bakeType,instructions,pinterest,notes,photoUrl}=rec;
+    const payload={name,protein,meal,bakeType,tags,appliances,ingredients,instructions,pinterest,notes,photoUrl:photoUrl||(rec.id&&photos[rec.id])||""};
+    if(rec.importId){
+      await libraryRequest("PUT","/api/recipes/"+encodeURIComponent(rec.importId),pw,payload);
+      toast("Shared library updated");
+    } else {
+      const result=await libraryRequest("POST","/api/recipes",pw,payload);
+      rec.importId=result.importId;
+      if(!state.importedIds) state.importedIds=[];
+      if(!state.importedIds.includes(result.importId)) state.importedIds.push(result.importId);
+      saveState();
+      toast("Published to shared library");
+    }
+  }catch(e){ toast("Failed: "+(e.message||"error")); }
+}
+async function removeFromLibrary(rec){
+  if(!libraryApiUrl){ toast("Set up the shared library API URL in Settings first"); return; }
+  if(!rec.importId){ toast("This recipe isn't in the shared library"); return; }
+  const pw=await openPasswordPrompt("Remove from shared library","This won't touch your own copy — just the shared version everyone else gets.");
+  if(pw==null) return;
+  try{
+    await libraryRequest("DELETE","/api/recipes/"+encodeURIComponent(rec.importId),pw);
+    delete rec.importId; saveState();
+    toast("Removed from shared library");
+  }catch(e){ toast("Failed: "+(e.message||"error")); }
+}
+
 /* recipe form */
 function openForm(existing,prefill){
   const r=existing||{name:"",protein:"Chicken",meal:(state.mealView||"Dinner"),bakeType:"Cookies",tags:[],appliances:[],ingredients:[{name:"",qty:"",store:STORES[0],brand:""}],pinterest:"",notes:"",instructions:"",photoUrl:"",...(prefill||{})};
@@ -896,6 +977,7 @@ function openForm(existing,prefill){
     <label class="fld"><span class="lb">Instructions (optional)</span><textarea id="fInstructions" placeholder="1. Preheat oven...&#10;2. Mix the dry ingredients...">${esc(r.instructions||"")}</textarea></label>
     <label class="fld"><span class="lb">Pinterest link (optional)</span><input id="fPin" value="${esc(r.pinterest||"")}" placeholder="https://pinterest.com/..." inputmode="url" /></label>
     <label class="fld"><span class="lb">Notes (optional)</span><textarea id="fNotes" placeholder="Cooking notes, texture/spice reminders...">${esc(r.notes||"")}</textarea></label>
+    ${existing?`<div class="fld"><span class="lb">Shared recipe library</span><div class="row" style="gap:8px;"><button type="button" class="ghost" id="fPublish" style="flex:1;">🔒 ${existing.importId?"Update":"Publish to"} shared library</button>${existing.importId?'<button type="button" class="ghost" id="fUnpublish" style="flex:none; color:var(--danger);">🔒 Remove</button>':''}</div></div>`:''}
     <div class="sheetactions"><button class="ghost" id="fCancel" style="flex:none;">Cancel</button>${existing?'<button class="ghost" id="fDelete" style="flex:none; color:var(--danger);">Delete</button>':''}<button class="btn" id="fSave">Save recipe</button></div>`;
   document.body.appendChild(overlay);
   const ingWrap=sheet.querySelector("#fIngs");
@@ -922,13 +1004,20 @@ function openForm(existing,prefill){
   overlay.addEventListener("click",e=>{ if(e.target===overlay) close(); });
   sheet.querySelector("#fCancel").onclick=close;
   if(existing) sheet.querySelector("#fDelete").onclick=()=>{ state.recipes=state.recipes.filter(x=>x.id!==existing.id); state.weekMeals=state.weekMeals.filter(m=>m.recipeId!==existing.id); removePhoto(existing.id); close(); saveState(); render(); };
-  sheet.querySelector("#fSave").onclick=()=>{ const name=sheet.querySelector("#fName").value.trim(); if(!name){ sheet.querySelector("#fName").focus(); return; }
+  function buildRecFromForm(){
+    const name=sheet.querySelector("#fName").value.trim();
+    if(!name){ sheet.querySelector("#fName").focus(); return null; }
     const ings=[...ingWrap.children].map(div=>({name:div.querySelector(".i-name").value.trim(),qty:div.querySelector(".i-qty").value.trim(),store:div.querySelector(".i-store").value,brand:div.querySelector(".i-brand").value.trim()})).filter(i=>i.name);
     const tags=[...sheet.querySelectorAll("#fTags .chip.on")].map(c=>c.dataset.tag); const appliances=[...sheet.querySelectorAll("#fTools .chip.on")].map(c=>c.dataset.tool);
     const mealVal=_meal.value; const bakeVal=sheet.querySelector("#fBakeType").value; const protVal=(mealVal==="Baking")?"Other":sheet.querySelector("#fProtein").value;
-    const rec={id:existing?existing.id:id(),name,meal:mealVal,protein:protVal,bakeType:bakeVal,tags,appliances,ingredients:ings,instructions:sheet.querySelector("#fInstructions").value.trim(),pinterest:sheet.querySelector("#fPin").value.trim(),notes:sheet.querySelector("#fNotes").value.trim(),favorite:existing?existing.favorite:false,photo:existing?(existing.photo||false):false,photoUrl:existing?(existing.photoUrl||""):(r.photoUrl||"")};
+    const rec={id:existing?existing.id:id(),importId:existing?(existing.importId||""):"",name,meal:mealVal,protein:protVal,bakeType:bakeVal,tags,appliances,ingredients:ings,instructions:sheet.querySelector("#fInstructions").value.trim(),pinterest:sheet.querySelector("#fPin").value.trim(),notes:sheet.querySelector("#fNotes").value.trim(),favorite:existing?existing.favorite:false,photo:existing?(existing.photo||false):false,photoUrl:existing?(existing.photoUrl||""):(r.photoUrl||"")};
     if(photoDirty){ if(pendingPhoto){ rec.photo=true; savePhoto(rec.id,pendingPhoto); } else { rec.photo=false; removePhoto(rec.id); } }
-    if(existing){ const i=state.recipes.findIndex(x=>x.id===existing.id); state.recipes[i]=rec; } else state.recipes.unshift(rec); close(); saveState(); render(); };
+    return rec;
+  }
+  function persistRec(rec){ if(existing){ const i=state.recipes.findIndex(x=>x.id===existing.id); state.recipes[i]=rec; } else state.recipes.unshift(rec); saveState(); }
+  sheet.querySelector("#fSave").onclick=()=>{ const rec=buildRecFromForm(); if(!rec) return; persistRec(rec); close(); render(); };
+  if(existing) sheet.querySelector("#fPublish").onclick=async()=>{ const rec=buildRecFromForm(); if(!rec) return; persistRec(rec); await publishToLibrary(rec); close(); render(); };
+  if(existing&&existing.importId) sheet.querySelector("#fUnpublish").onclick=async()=>{ const rec=buildRecFromForm(); if(!rec) return; persistRec(rec); await removeFromLibrary(rec); close(); render(); };
   setTimeout(()=>sheet.querySelector("#fName").focus(),50);
 }
 
@@ -996,7 +1085,7 @@ main.addEventListener("input", e=>{
   } else { state=seed(); }
   if(!state.importedIds) state.importedIds=[];
   let added=0;
-  IMPORTS.forEach(rec=>{ if(!state.importedIds.includes(rec.importId)){ const {importId,...r}=rec; r.id=id(); state.recipes.unshift(r); state.importedIds.push(importId); added++; } });
+  IMPORTS.forEach(rec=>{ if(!state.importedIds.includes(rec.importId)){ const r={...rec}; r.id=id(); state.recipes.unshift(r); state.importedIds.push(rec.importId); added++; } });
   if(added) saveState();
   if(!state.airFryerV1){ if(!state.appliances.some(a=>a.toLowerCase()==="air fryer")) state.appliances.push("Air Fryer"); state.airFryerV1=true; saveState(); }
   if(!state.tagsV2){ state.recipes.forEach(r=>{ r.tags=(r.tags||[]).filter(t=>t==="adapt"); if(/tuscan mushroom/i.test(r.name)&&!r.tags.includes("adapt")) r.tags.push("adapt"); }); state.tagsV2=true; saveState(); }
@@ -1008,6 +1097,7 @@ main.addEventListener("input", e=>{
   await Promise.all(state.recipes.filter(r=>r.photo).map(r=>loadPhoto(r.id)));
   apiKey=await loadApiKey();
   geminiKey=await loadGeminiKey();
+  libraryApiUrl=await loadLibraryApiUrl();
   applyTheme(state.theme); applyFont(state.font); applyBg(state.bg);
   render();
 })();
