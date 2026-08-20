@@ -1,4 +1,10 @@
-# Publishing/removing recipes from the shared library (optional, not deployed yet)
+> **Update:** this and the site-wide login gate from `ACCESS-CONTROL.md`
+> were merged into one deployable script at
+> [`worker/index.js`](worker/index.js) — that's the actual source of truth
+> now. The script below is kept for reference / the "why," but if you're
+> pasting something into Cloudflare, use the file.
+
+# Publishing/removing recipes from the shared library
 
 The recipe library that ships to everyone lives in
 [`data/recipes.json`](data/recipes.json) in this repo. The app itself can

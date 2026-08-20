@@ -1,4 +1,9 @@
-# Adding a real login gate (not implemented yet)
+> **Update:** this and the shared-library write API below were merged into
+> one deployable script at [`worker/index.js`](worker/index.js) — that's
+> the actual source of truth now. The script below is kept for reference /
+> the "why," but if you're pasting something into Cloudflare, use the file.
+
+# Adding a real login gate
 
 The app is hosted on GitHub Pages, which is always fully public once a repo's
 Pages source is enabled — there's no password/login option at that layer, and
